@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="format-detection" content="telephone=no, address=no, email=no">
+<title>DPM · AP Invoice Log</title>
+<!-- ======================================================================
+  DPM AP Invoice Log
+  Replaces: Fast_Food_Invoice_Log_-_2026.xlsx + DPR_Fast_Food_Invoice_Log-_2026.xlsx
+  Data model (all in Firestore — nothing store/vendor-specific hardcoded here):
+    stores/{id}    { name, entity, active }
+    vendors/{id}   { name }
+    accounts/{id}  { vendor, vendorId, store, storeId, accountNumber, last4,
+                     book, billType, estReceival, estInvoice, estDue,
+                     activeFrom "YYYY-MM", activeTo "YYYY-MM"|null, notes }
+    status/{YYYY-MM} { year, month, entries: { accountId: {v:"Y"|"N"|"", by, at} } }
+    settings/app   { findmiUrl }
+  An account is EXPECTED in a month if activeFrom <= YYYY-MM <= activeTo.
+  Adding a store = one wizard (clones a vendor set from an existing store).
+  Every count on screen is computed live — no pivot tables, no hardcoded totals.
+  Firebase web config lives in firebase-config.js (public by design; real
+  security = Firebase Auth + Firestore rules, see firestore.rules).
+====================================================================== -->
+<style>
+/* ---- Fonts: match the FindMi family (Cinzel wordmark, Mulish workhorse) ---- */
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Mulish:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap');
+
+:root{
+  --navy:#251d7f; --navy-deep:#14104a; --navy-soft:#eceafd;
+  --red:#e8091b; --red-soft:#ffe0e3;
+  --saved:#0e7a44; --saved-soft:#e2f4ea;
+  --flag:#b45309; --flag-soft:#fdf0dd;
+  --paper:#f4f5fa; --card:#ffffff;
+  --ink:#1a2033; --muted:#5b6478; --line:#e3e6f0;
+  --radius:10px;
+  --shadow:0 1px 2px rgba(20,16,74,.06), 0 8px 24px rgba(20,16,74,.07);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:'Mulish',system-ui,sans-serif; background:var(--paper); color:var(--ink);
+  font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+}
+button{font:inherit; cursor:pointer}
+input,select{font:inherit; color:var(--ink)}
+:focus-visible{outline:2px solid var(--navy); outline-offset:2px}
+@media (prefers-reduced-motion: reduce){ *{transition:none!important; animation:none!important} }
+
+/* ============================= Top bar ============================= */
+.topbar{
+  background:linear-gradient(180deg,var(--navy-deep),var(--navy));
+  color:#fff; padding:10px 18px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+}
+.wordmark{font-family:'Cinzel',serif; font-weight:700; font-size:1.05rem; letter-spacing:.14em}
+.wordmark .m{color:#ff5d6c}
+.wordmark small{font-family:'Mulish'; font-weight:600; letter-spacing:.02em; opacity:.75; margin-left:8px; font-size:.72rem; text-transform:uppercase}
+.topbar .spacer{flex:1}
+.conn{display:flex; align-items:center; gap:6px; font-size:.72rem; opacity:.9}
+.conn .dot{width:8px;height:8px;border-radius:50%;background:#f6c34a}
+.conn.ok .dot{background:#3ddc84}
+.conn.err .dot{background:#ff5d6c}
+.who{font-size:.78rem; opacity:.85; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.tb-btn{
+  background:rgba(255,255,255,.12); color:#fff; border:1px solid rgba(255,255,255,.25);
+  border-radius:8px; padding:6px 12px; font-weight:700; font-size:.78rem;
+}
+.tb-btn:hover{background:rgba(255,255,255,.22)}
+select.year-sel{
+  background:rgba(255,255,255,.12); color:#fff; border:1px solid rgba(255,255,255,.3);
+  border-radius:8px; padding:5px 8px; font-weight:700;
+}
+select.year-sel option{color:var(--ink)}
+
+/* ===================== Month rail (the thumb index) ===================== */
+.month-rail{display:flex; gap:6px; padding:12px 18px 4px; overflow-x:auto}
+.mchip{
+  position:relative; flex:1; min-width:74px; border:1px solid var(--line); border-radius:9px;
+  background:var(--card); padding:7px 8px 8px; text-align:left; overflow:hidden;
+  transition:border-color .12s, box-shadow .12s;
+}
+.mchip .fill{position:absolute; inset:auto 0 0 0; height:3px; background:var(--line)}
+.mchip .fill i{display:block; height:100%; background:var(--saved); width:0}
+.mchip b{display:block; font-size:.8rem; letter-spacing:.04em}
+.mchip .nums{font-size:.68rem; color:var(--muted); font-variant-numeric:tabular-nums}
+.mchip .miss{
+  position:absolute; top:6px; right:6px; background:var(--red); color:#fff; border-radius:999px;
+  font-size:.62rem; font-weight:800; padding:1px 6px; font-variant-numeric:tabular-nums;
+}
+.mchip .miss.zero{background:var(--saved)}
+.mchip:hover{border-color:var(--navy)}
+.mchip.sel{border-color:var(--navy); box-shadow:0 0 0 2px var(--navy-soft), var(--shadow)}
+.mchip.future{opacity:.6}
+
+/* ============================= Toolbar ============================= */
+.toolbar{display:flex; gap:8px; align-items:center; padding:10px 18px; flex-wrap:wrap}
+.toolbar input[type=search]{
+  flex:1; min-width:180px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--card);
+}
+.toolbar select{border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--card); max-width:180px}
+.seg{display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--card)}
+.seg button{border:0; background:transparent; padding:8px 12px; font-weight:700; font-size:.78rem; color:var(--muted)}
+.seg button.on{background:var(--navy); color:#fff}
+.summary{
+  margin:0 18px 10px; background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+  padding:10px 14px; display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; box-shadow:var(--shadow);
+}
+.summary b{font-size:1.15rem; font-variant-numeric:tabular-nums}
+.summary .lbl{font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; font-weight:700}
+.summary .miss b{color:var(--red)} .summary .ok b{color:var(--saved)}
+.summary .bar{flex:1; min-width:120px; height:6px; border-radius:99px; background:var(--line); overflow:hidden}
+.summary .bar i{display:block;height:100%;background:var(--saved)}
+
+/* ============================= Layout ============================= */
+.main{display:flex; gap:14px; padding:0 18px 40px; align-items:flex-start}
+.grid-wrap{flex:1; min-width:0; background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden}
+.table-scroll{overflow-x:auto}
+table.grid{width:100%; border-collapse:collapse; min-width:760px}
+.grid th{
+  text-align:left; font-size:.66rem; text-transform:uppercase; letter-spacing:.07em; color:var(--muted);
+  padding:9px 10px; border-bottom:1px solid var(--line); background:#fafbfe; position:sticky; top:0; z-index:2;
+}
+.grid td{padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:middle}
+.grid tr:hover td{background:#f7f8fd}
+.grid .ghead td{
+  background:var(--navy-soft); color:var(--navy-deep); font-weight:800; font-size:.78rem;
+  letter-spacing:.03em; padding:6px 10px; position:sticky; top:33px; z-index:1;
+}
+.grid .ghead .gcount{float:right; font-weight:700; font-size:.7rem; color:var(--muted); font-variant-numeric:tabular-nums}
+.acct{font-variant-numeric:tabular-nums; color:var(--muted); font-size:.8rem; white-space:nowrap}
+.est{font-variant-numeric:tabular-nums; font-size:.8rem; color:var(--muted); white-space:nowrap}
+.badge-book{font-size:.62rem; font-weight:800; border-radius:5px; padding:1px 6px; background:var(--navy-soft); color:var(--navy-deep); letter-spacing:.04em}
+.retired-tag{font-size:.62rem; color:var(--flag); font-weight:700}
+
+/* Status stamp cell */
+.stamp{display:flex; gap:5px; align-items:center; justify-content:flex-end}
+.stamp button{
+  border:1.5px solid var(--line); background:#fff; border-radius:8px; min-width:44px; padding:5px 0;
+  font-weight:800; font-size:.82rem; color:var(--muted); transition:all .1s;
+}
+.stamp button:hover{border-color:var(--navy)}
+.stamp .y.on{background:var(--saved); border-color:var(--saved); color:#fff; box-shadow:0 1px 0 rgba(0,0,0,.15) inset}
+.stamp .n.on{background:var(--flag); border-color:var(--flag); color:#fff}
+.stamp .meta{font-size:.62rem; color:var(--muted); min-width:86px; text-align:right}
+
+/* Missing-by-store panel (replaces the Total Rcvd. pivot) */
+.side{width:250px; flex:none; background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:12px}
+.side h3{margin:0 0 4px; font-size:.72rem; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
+.side .hint{font-size:.68rem; color:var(--muted); margin-bottom:8px}
+.side table{width:100%; border-collapse:collapse; font-size:.8rem}
+.side td{padding:4px 2px; border-bottom:1px dashed var(--line); font-variant-numeric:tabular-nums}
+.side tr{cursor:pointer}
+.side tr:hover td{color:var(--navy)}
+.side td.n{text-align:right; font-weight:800; color:var(--red)}
+.side td.n.zero{color:var(--saved)}
+@media (max-width:1100px){ .side{display:none} }
+
+/* ============================= Modals / drawer ============================= */
+.overlay{position:fixed; inset:0; background:rgba(20,16,74,.45); display:none; z-index:50}
+.overlay.open{display:flex; align-items:flex-start; justify-content:center; padding:40px 14px; overflow:auto}
+.modal{background:#fff; border-radius:14px; box-shadow:var(--shadow); width:100%; max-width:640px; padding:20px}
+.modal.wide{max-width:860px}
+.modal h2{margin:0 0 4px; font-size:1.05rem}
+.modal .sub{color:var(--muted); font-size:.8rem; margin-bottom:14px}
+.modal label{display:block; font-size:.7rem; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:12px 0 4px}
+.modal input[type=text],.modal input[type=url],.modal input[type=email],.modal input[type=password],.modal select{
+  width:100%; border:1px solid var(--line); border-radius:8px; padding:9px 12px;
+}
+.modal .row2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+.modal .row3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px}
+.actions{display:flex; gap:8px; justify-content:flex-end; margin-top:18px}
+.btn{border-radius:8px; border:1px solid var(--line); background:#fff; padding:8px 16px; font-weight:700}
+.btn.primary{background:var(--navy); border-color:var(--navy); color:#fff}
+.btn.primary:hover{background:var(--navy-deep)}
+.btn.danger{color:var(--red); border-color:var(--red-soft)}
+.btn:disabled{opacity:.5; cursor:default}
+.checklist{max-height:260px; overflow:auto; border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin-top:4px}
+.checklist label{display:flex; gap:8px; align-items:center; font-size:.82rem; font-weight:400; text-transform:none; letter-spacing:0; color:var(--ink); margin:5px 0}
+.mini-table{width:100%; border-collapse:collapse; font-size:.8rem; margin-top:8px}
+.mini-table th{ text-align:left; font-size:.64rem; text-transform:uppercase; color:var(--muted); padding:5px 6px; border-bottom:1px solid var(--line)}
+.mini-table td{padding:5px 6px; border-bottom:1px solid var(--line)}
+.mini-table .act{white-space:nowrap; text-align:right}
+.mini-table .act button{border:0;background:none;color:var(--navy);font-weight:700;font-size:.74rem;padding:2px 6px}
+.tabs{display:flex; gap:4px; border-bottom:1px solid var(--line); margin:8px 0 14px; flex-wrap:wrap}
+.tabs button{border:0; background:none; padding:8px 12px; font-weight:700; color:var(--muted); border-bottom:2px solid transparent}
+.tabs button.on{color:var(--navy); border-bottom-color:var(--navy)}
+.note{background:var(--navy-soft); border-radius:8px; padding:10px 12px; font-size:.78rem; margin:10px 0}
+.note.warn{background:var(--flag-soft)}
+.toast-host{position:fixed; bottom:18px; left:50%; transform:translateX(-50%); z-index:99; display:flex; flex-direction:column; gap:8px; align-items:center}
+.toast{background:var(--navy-deep); color:#fff; border-radius:99px; padding:9px 18px; font-size:.8rem; font-weight:700; box-shadow:var(--shadow)}
+.toast.err{background:var(--red)}
+
+/* ============================= Full-page states ============================= */
+.gate{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+  background:linear-gradient(160deg,var(--navy-deep) 0%, var(--navy) 55%, #322aa0 100%)}
+.gate .card{background:#fff; border-radius:16px; padding:30px 28px; width:100%; max-width:400px; box-shadow:var(--shadow)}
+.gate .wordmark{color:var(--navy-deep); display:block; margin-bottom:2px}
+.gate .card p.lead{color:var(--muted); font-size:.85rem; margin:4px 0 18px}
+.gate label{display:block; font-size:.7rem; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:12px 0 4px}
+.gate input{width:100%; border:1px solid var(--line); border-radius:8px; padding:10px 12px}
+.gate .btn{width:100%; margin-top:16px; padding:11px}
+.gate .err-msg{color:var(--red); font-size:.78rem; margin-top:10px; min-height:1em}
+.gate code{background:var(--paper); border-radius:6px; padding:2px 6px; font-size:.78rem}
+.gate ol{padding-left:18px; font-size:.82rem; color:var(--ink)}
+.hidden{display:none!important}
+.empty{padding:34px; text-align:center; color:var(--muted); font-size:.85rem}
+</style>
+</head>
+<body>
+
+<!-- Setup screen: shown when firebase-config.js is missing -->
+<div id="setupScreen" class="gate hidden">
+  <div class="card">
+    <span class="wordmark">DP<span class="m" style="color:var(--red)">M</span><small>AP Invoice Log</small></span>
+    <p class="lead">One-time setup — connect this page to your Firebase project.</p>
+    <ol>
+      <li>Copy <code>firebase-config.example.js</code> to <code>firebase-config.js</code>.</li>
+      <li>Paste your project's web config from the Firebase console into it.</li>
+      <li>Commit and redeploy. Full steps are in the README.</li>
+    </ol>
+    <p class="lead" style="margin-top:14px">The web config is safe to publish — access to the data itself is controlled by Firebase sign-in and security rules, not by hiding the config.</p>
+  </div>
+</div>
+
+<!-- Sign-in screen -->
+<div id="authScreen" class="gate hidden">
+  <div class="card">
+    <span class="wordmark">DP<span class="m" style="color:var(--red)">M</span><small>AP Invoice Log</small></span>
+    <p class="lead">Sign in with your AP team account.</p>
+    <form id="loginForm">
+      <label for="loginEmail">Email</label>
+      <input id="loginEmail" type="email" autocomplete="username" required>
+      <label for="loginPw">Password</label>
+      <input id="loginPw" type="password" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">Sign in</button>
+      <div class="err-msg" id="loginErr"></div>
+    </form>
+    <p class="lead" style="margin-top:12px">No account yet? An admin can add you in the Firebase console under Authentication → Users.</p>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="app" class="hidden">
+  <header class="topbar">
+    <span class="wordmark">DP<span class="m">M</span><small>AP Invoice Log</small></span>
+    <select id="yearSel" class="year-sel" aria-label="Year"></select>
+    <div class="spacer"></div>
+    <div id="conn" class="conn"><div class="dot"></div><span id="connText">Connecting…</span></div>
+    <span class="who" id="whoAmI"></span>
+    <button class="tb-btn" id="adminBtn">Manage</button>
+    <button class="tb-btn" id="signOutBtn">Sign out</button>
+  </header>
+
+  <nav class="month-rail" id="monthRail" aria-label="Months"></nav>
+
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Search vendor, store, or account #" aria-label="Search">
+    <select id="fBook" aria-label="Filter by log"></select>
+    <select id="fStore" aria-label="Filter by store"></select>
+    <select id="fVendor" aria-label="Filter by vendor"></select>
+    <div class="seg" role="group" aria-label="Group rows by">
+      <button id="gbVendor" class="on">By vendor</button>
+      <button id="gbStore">By store</button>
+    </div>
+    <button class="btn" id="csvBtn" title="Download this month's view as CSV">CSV</button>
+  </div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="main">
+    <div class="grid-wrap">
+      <div class="table-scroll">
+        <table class="grid" id="gridTable">
+          <thead>
+            <tr>
+              <th style="width:24%">Vendor</th><th style="width:18%">Store</th>
+              <th>Account #</th><th>Est. rcv'l</th><th>Est. invoice</th><th>Est. due / draft</th>
+              <th style="text-align:right">Invoice saved?</th>
+            </tr>
+          </thead>
+          <tbody id="gridBody"></tbody>
+        </table>
+      </div>
+      <div id="gridEmpty" class="empty hidden"></div>
+    </div>
+    <aside class="side" id="sidePanel">
+      <h3>Missing by store</h3>
+      <div class="hint">This month · click a store to filter</div>
+      <table><tbody id="sideBody"></tbody></table>
+    </aside>
+  </div>
+</div>
+
+<!-- Modal host -->
+<div class="overlay" id="overlay"><div class="modal" id="modalBox"></div></div>
+<div class="toast-host" id="toastHost"></div>
+
+<!-- Firebase web config (not a secret — see README). If this file is absent, the setup screen shows. -->
+<script src="firebase-config.js" onerror="void 0"></script>
+
+<script type="module">
+/* ======================================================================
+   App code. Everything below is data-driven from Firestore.
+====================================================================== */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const ymKey = (y, m) => `${y}-${String(m).padStart(2,"0")}`;
+const slug = (s) => String(s||"").normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"") || "x";
+
+const state = {
+  user: null,
+  stores: {}, vendors: {}, accounts: {}, statusByYm: {}, settings: {},
+  ui: {
+    year: new Date().getFullYear(), month: new Date().getMonth() + 1,
+    groupBy: "vendor", q: "", fBook: "", fStore: "", fVendor: "",
+  },
+  unsub: [], unsubStatus: null,
+};
+
+let fb = null; // { auth, db, fns... } filled after dynamic import
+
+/* ---------------------------- Boot ---------------------------- */
+(async function boot() {
+  if (!window.FIREBASE_CONFIG || !window.FIREBASE_CONFIG.apiKey) {
+    $("setupScreen").classList.remove("hidden");
+    return;
+  }
+  try {
+    const [{ initializeApp }, authMod, fsMod] = await Promise.all([
+      import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"),
+      import("https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js"),
+      import("https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"),
+    ]);
+    const app = initializeApp(window.FIREBASE_CONFIG);
+    fb = {
+      auth: authMod.getAuth(app), db: fsMod.getFirestore(app),
+      signIn: authMod.signInWithEmailAndPassword, signOut: authMod.signOut,
+      onAuth: authMod.onAuthStateChanged,
+      col: fsMod.collection, doc: fsMod.doc, onSnapshot: fsMod.onSnapshot,
+      setDoc: fsMod.setDoc, updateDoc: fsMod.updateDoc, deleteDoc: fsMod.deleteDoc,
+      query: fsMod.query, where: fsMod.where, writeBatch: fsMod.writeBatch,
+      serverTimestamp: fsMod.serverTimestamp, getDocs: fsMod.getDocs,
+    };
+  } catch (e) {
+    $("setupScreen").classList.remove("hidden");
+    $("setupScreen").querySelector("p.lead").textContent =
+      "Couldn't load Firebase from the CDN — check your internet connection and reload.";
+    console.error(e);
+    return;
+  }
+
+  fb.onAuth(fb.auth, (user) => {
+    state.user = user;
+    if (user) { showApp(); subscribeAll(); }
+    else { showAuth(); unsubscribeAll(); }
+  });
+
+  $("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("loginErr").textContent = "";
+    try { await fb.signIn(fb.auth, $("loginEmail").value.trim(), $("loginPw").value); }
+    catch (err) {
+      $("loginErr").textContent = ({
+        "auth/invalid-credential": "Email or password doesn't match. Check with your admin if you need a reset.",
+        "auth/too-many-requests": "Too many attempts — wait a minute and try again.",
+      })[err.code] || "Couldn't sign in: " + (err.code || err.message);
+    }
+  });
+  $("signOutBtn").addEventListener("click", () => fb.signOut(fb.auth));
+  wireToolbar();
+})();
+
+function showApp(){ $("authScreen").classList.add("hidden"); $("app").classList.remove("hidden"); $("whoAmI").textContent = state.user.email; }
+function showAuth(){ $("app").classList.add("hidden"); $("authScreen").classList.remove("hidden"); }
+function setConn(cls, txt){ const c=$("conn"); c.className="conn "+cls; $("connText").textContent=txt; }
+
+/* ---------------------------- Subscriptions ---------------------------- */
+function subscribeAll() {
+  unsubscribeAll();
+  setConn("", "Connecting…");
+  const sub = (name, target) => fb.onSnapshot(fb.col(fb.db, name), (snap) => {
+    const out = {};
+    snap.forEach(d => out[d.id] = d.data());
+    state[target] = out;
+    setConn("ok", "Live");
+    renderAll();
+  }, (err) => { setConn("err", "Connection error"); toast("Couldn't load " + name + " — check Firestore rules.", true); console.error(err); });
+  state.unsub.push(sub("stores", "stores"), sub("vendors", "vendors"), sub("accounts", "accounts"));
+  state.unsub.push(fb.onSnapshot(fb.doc(fb.db, "settings", "app"), (d) => { state.settings = d.data() || {}; }));
+  subscribeStatusYear();
+}
+function subscribeStatusYear() {
+  if (state.unsubStatus) state.unsubStatus();
+  const qy = fb.query(fb.col(fb.db, "status"), fb.where("year", "==", state.ui.year));
+  state.unsubStatus = fb.onSnapshot(qy, (snap) => {
+    const out = {};
+    snap.forEach(d => out[d.id] = d.data());
+    state.statusByYm = out;
+    renderAll();
+  });
+}
+function unsubscribeAll(){ state.unsub.forEach(u => u && u()); state.unsub = []; if (state.unsubStatus){ state.unsubStatus(); state.unsubStatus = null; } }
+
+/* ---------------------------- Core logic ---------------------------- */
+function isActive(acc, ym) { return acc.activeFrom <= ym && (!acc.activeTo || acc.activeTo >= ym); }
+function markOf(aid, ym) { return state.statusByYm[ym]?.entries?.[aid] || null; }
+
+function monthStats(ym, filterFn) {
+  let expected = 0, saved = 0, flagged = 0;
+  for (const [aid, acc] of Object.entries(state.accounts)) {
+    if (!isActive(acc, ym)) continue;
+    if (filterFn && !filterFn(acc)) continue;
+    expected++;
+    const v = markOf(aid, ym)?.v || "";
+    if (v === "Y") saved++; else if (v === "N") flagged++;
+  }
+  return { expected, saved, flagged, missing: expected - saved };
+}
+
+function passesFilters(acc) {
+  const u = state.ui;
+  if (u.fBook && acc.book !== u.fBook) return false;
+  if (u.fStore && acc.storeId !== u.fStore) return false;
+  if (u.fVendor && acc.vendorId !== u.fVendor) return false;
+  if (u.q) {
+    const hay = `${acc.vendor} ${acc.store} ${acc.accountNumber} ${acc.last4}`.toLowerCase();
+    if (!hay.includes(u.q.toLowerCase())) return false;
+  }
+  return true;
+}
+
+async function setMark(aid, val) {
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const cur = markOf(aid, ym)?.v || "";
+  const next = (cur === val) ? "" : val;   // pressing the active button clears it
+  try {
+    await fb.setDoc(fb.doc(fb.db, "status", ym), {
+      year: state.ui.year, month: state.ui.month,
+      entries: { [aid]: { v: next, by: state.user.email, at: fb.serverTimestamp() } },
+    }, { merge: true });
+  } catch (e) { toast("Save failed — are you still signed in?", true); console.error(e); }
+}
+
+/* ---------------------------- Rendering ---------------------------- */
+function renderAll(){ renderYearSel(); renderMonthRail(); renderFilters(); renderSummary(); renderGrid(); renderSide(); }
+
+function knownYears() {
+  const ys = new Set([new Date().getFullYear(), state.ui.year]);
+  Object.values(state.accounts).forEach(a => { ys.add(+a.activeFrom.slice(0,4)); if (a.activeTo) ys.add(+a.activeTo.slice(0,4)); });
+  Object.keys(state.statusByYm).forEach(k => ys.add(+k.slice(0,4)));
+  return [...ys].sort();
+}
+function renderYearSel() {
+  const sel = $("yearSel");
+  const ys = knownYears();
+  const html = ys.map(y => `<option value="${y}" ${y===state.ui.year?"selected":""}>${y}</option>`).join("");
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+}
+
+function renderMonthRail() {
+  const now = new Date();
+  const rail = $("monthRail");
+  rail.innerHTML = MONTH_NAMES.map((name, i) => {
+    const m = i + 1, ym = ymKey(state.ui.year, m);
+    const st = monthStats(ym, null);
+    const pct = st.expected ? Math.round(100 * st.saved / st.expected) : 0;
+    const isFuture = state.ui.year > now.getFullYear() || (state.ui.year === now.getFullYear() && m > now.getMonth() + 1);
+    const missBadge = st.expected ? `<span class="miss ${st.missing===0?"zero":""}">${st.missing===0?"✓":st.missing}</span>` : "";
+    return `<button class="mchip ${m===state.ui.month?"sel":""} ${isFuture?"future":""}" data-m="${m}" aria-label="${name}: ${st.saved} of ${st.expected} saved">
+      ${missBadge}<b>${name}</b>
+      <span class="nums">${st.saved}/${st.expected}</span>
+      <span class="fill"><i style="width:${pct}%"></i></span>
+    </button>`;
+  }).join("");
+  rail.querySelectorAll(".mchip").forEach(b => b.addEventListener("click", () => { state.ui.month = +b.dataset.m; renderAll(); }));
+}
+
+function renderFilters() {
+  const books = [...new Set(Object.values(state.accounts).map(a => a.book))].sort();
+  fillSelect($("fBook"), books.map(b => [b, "Log: " + b]), state.ui.fBook, "All logs");
+  const stores = Object.entries(state.stores).sort((a,b) => a[1].name.localeCompare(b[1].name));
+  fillSelect($("fStore"), stores.map(([id,s]) => [id, s.name]), state.ui.fStore, "All stores");
+  const vendors = Object.entries(state.vendors).sort((a,b) => a[1].name.localeCompare(b[1].name));
+  fillSelect($("fVendor"), vendors.map(([id,v]) => [id, v.name]), state.ui.fVendor, "All vendors");
+}
+function fillSelect(sel, pairs, current, blankLabel) {
+  const html = `<option value="">${esc(blankLabel)}</option>` + pairs.map(([v,l]) => `<option value="${esc(v)}" ${v===current?"selected":""}>${esc(l)}</option>`).join("");
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+}
+
+function renderSummary() {
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const st = monthStats(ym, passesFilters);
+  const pct = st.expected ? Math.round(100 * st.saved / st.expected) : 0;
+  $("summary").innerHTML = `
+    <span>${MONTH_NAMES[state.ui.month-1]} ${state.ui.year}</span>
+    <span class="ok"><b>${st.saved}</b> <span class="lbl">saved</span></span>
+    <span class="miss"><b>${st.missing}</b> <span class="lbl">missing</span></span>
+    ${st.flagged ? `<span><b>${st.flagged}</b> <span class="lbl">marked N</span></span>` : ""}
+    <span><b>${st.expected}</b> <span class="lbl">expected</span></span>
+    <span class="bar" aria-hidden="true"><i style="width:${pct}%"></i></span>`;
+}
+
+function fmtWhen(at) {
+  if (!at) return "";
+  try {
+    const d = at.toDate ? at.toDate() : new Date(at);
+    return d.toLocaleDateString(undefined, { month:"short", day:"numeric" });
+  } catch { return ""; }
+}
+
+function renderGrid() {
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const rows = Object.entries(state.accounts)
+    .filter(([,a]) => isActive(a, ym) && passesFilters(a));
+  const keyFn = state.ui.groupBy === "vendor" ? (a) => a.vendor : (a) => a.store;
+  rows.sort(([,a],[,b]) => keyFn(a).localeCompare(keyFn(b)) || a.store.localeCompare(b.store) || a.vendor.localeCompare(b.vendor));
+
+  const body = $("gridBody");
+  if (!rows.length) {
+    body.innerHTML = "";
+    const e = $("gridEmpty");
+    e.classList.remove("hidden");
+    e.innerHTML = Object.keys(state.accounts).length
+      ? `No accounts match these filters for ${MONTH_NAMES[state.ui.month-1]} ${state.ui.year}. <button class="btn" id="clearF">Clear filters</button>`
+      : `No accounts yet. Open <b>Manage → Data</b> to import your seed file, or add stores and accounts by hand.`;
+    const cf = $("clearF");
+    if (cf) cf.addEventListener("click", () => { state.ui.q = state.ui.fBook = state.ui.fStore = state.ui.fVendor = ""; $("q").value=""; renderAll(); });
+    return;
+  }
+  $("gridEmpty").classList.add("hidden");
+
+  let html = "", lastGroup = null;
+  for (const [aid, a] of rows) {
+    const g = keyFn(a);
+    if (g !== lastGroup) {
+      const gStats = rows.filter(([,x]) => keyFn(x) === g);
+      const gSaved = gStats.filter(([id]) => markOf(id, ym)?.v === "Y").length;
+      html += `<tr class="ghead"><td colspan="7">${esc(g)}<span class="gcount">${gSaved}/${gStats.length}</span></td></tr>`;
+      lastGroup = g;
+    }
+    const mark = markOf(aid, ym);
+    const v = mark?.v || "";
+    const meta = v ? `${esc((mark.by||"").split("@")[0])} · ${fmtWhen(mark.at)}` : "";
+    html += `<tr>
+      <td>${esc(a.vendor)} ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</td>
+      <td>${esc(a.store)}</td>
+      <td class="acct" title="${esc(a.accountNumber)}">${esc(a.accountNumber || ("…" + a.last4))}</td>
+      <td class="est">${esc(a.estReceival)}</td>
+      <td class="est">${esc(a.estInvoice)}</td>
+      <td class="est">${esc(a.estDue)}</td>
+      <td><div class="stamp">
+        <span class="meta">${meta}</span>
+        <button class="y ${v==="Y"?"on":""}" data-aid="${esc(aid)}" data-v="Y" aria-pressed="${v==="Y"}" title="Invoice downloaded and saved to the server">Y</button>
+        <button class="n ${v==="N"?"on":""}" data-aid="${esc(aid)}" data-v="N" aria-pressed="${v==="N"}" title="Checked — invoice not available yet">N</button>
+      </div></td>
+    </tr>`;
+  }
+  body.innerHTML = html;
+  body.querySelectorAll(".stamp button").forEach(b =>
+    b.addEventListener("click", () => setMark(b.dataset.aid, b.dataset.v)));
+}
+
+function renderSide() {
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const per = {};
+  for (const [aid, a] of Object.entries(state.accounts)) {
+    if (!isActive(a, ym)) continue;
+    per[a.storeId] ||= { name: a.store, missing: 0 };
+    if (markOf(aid, ym)?.v !== "Y") per[a.storeId].missing++;
+  }
+  const rows = Object.entries(per).sort((x,y) => y[1].missing - x[1].missing || x[1].name.localeCompare(y[1].name));
+  $("sideBody").innerHTML = rows.map(([sid, s]) =>
+    `<tr data-sid="${esc(sid)}"><td>${esc(s.name)}</td><td class="n ${s.missing===0?"zero":""}">${s.missing===0?"✓":s.missing}</td></tr>`).join("");
+  $("sideBody").querySelectorAll("tr").forEach(tr =>
+    tr.addEventListener("click", () => { state.ui.fStore = tr.dataset.sid; renderAll(); }));
+}
+
+/* ---------------------------- Toolbar wiring ---------------------------- */
+function wireToolbar() {
+  $("q").addEventListener("input", (e) => { state.ui.q = e.target.value; renderSummary(); renderGrid(); });
+  $("fBook").addEventListener("change", (e) => { state.ui.fBook = e.target.value; renderAll(); });
+  $("fStore").addEventListener("change", (e) => { state.ui.fStore = e.target.value; renderAll(); });
+  $("fVendor").addEventListener("change", (e) => { state.ui.fVendor = e.target.value; renderAll(); });
+  $("gbVendor").addEventListener("click", () => setGroupBy("vendor"));
+  $("gbStore").addEventListener("click", () => setGroupBy("store"));
+  $("yearSel").addEventListener("change", (e) => { state.ui.year = +e.target.value; subscribeStatusYear(); renderAll(); });
+  $("csvBtn").addEventListener("click", exportCsv);
+  $("adminBtn").addEventListener("click", () => openAdmin("stores"));
+  $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeModal(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+}
+function setGroupBy(g){ state.ui.groupBy = g; $("gbVendor").classList.toggle("on", g==="vendor"); $("gbStore").classList.toggle("on", g==="store"); renderGrid(); }
+
+function exportCsv() {
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const rows = [["Month","Log","Vendor","Store","Account#","Est Receival","Est Invoice","Est Due","Status","By","When"]];
+  for (const [aid, a] of Object.entries(state.accounts)) {
+    if (!isActive(a, ym) || !passesFilters(a)) continue;
+    const m = markOf(aid, ym);
+    rows.push([ym, a.book, a.vendor, a.store, a.accountNumber, a.estReceival, a.estInvoice, a.estDue, m?.v || "", m?.by || "", fmtWhen(m?.at)]);
+  }
+  const csv = rows.map(r => r.map(c => `"${String(c ?? "").replace(/"/g,'""')}"`).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `invoice-log-${ym}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ---------------------------- Toasts / modal ---------------------------- */
+function toast(msg, isErr) {
+  const t = document.createElement("div");
+  t.className = "toast" + (isErr ? " err" : "");
+  t.textContent = msg;
+  $("toastHost").appendChild(t);
+  setTimeout(() => t.remove(), 4200);
+}
+function openModal(html, wide) { $("modalBox").className = "modal" + (wide ? " wide" : ""); $("modalBox").innerHTML = html; $("overlay").classList.add("open"); }
+function closeModal(){ $("overlay").classList.remove("open"); }
+
+/* ======================================================================
+   Manage drawer: Stores · Vendors · Accounts · FindMi sync · Data
+====================================================================== */
+function openAdmin(tab) {
+  const tabs = [["stores","Stores"],["vendors","Vendors"],["accounts","Accounts"],["sync","FindMi sync"],["data","Data"]];
+  openModal(`
+    <h2>Manage</h2>
+    <div class="sub">Add a store once — it flows into every month, count, and filter automatically.</div>
+    <div class="tabs">${tabs.map(([k,l]) => `<button data-t="${k}" class="${k===tab?"on":""}">${l}</button>`).join("")}</div>
+    <div id="adminBody"></div>
+    <div class="actions"><button class="btn" id="adminClose">Close</button></div>`, true);
+  $("modalBox").querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => openAdmin(b.dataset.t)));
+  $("adminClose").addEventListener("click", closeModal);
+  ({ stores: renderAdminStores, vendors: renderAdminVendors, accounts: renderAdminAccounts, sync: renderAdminSync, data: renderAdminData })[tab]();
+}
+
+/* ---- Stores tab ---- */
+function renderAdminStores() {
+  const list = Object.entries(state.stores).sort((a,b) => a[1].name.localeCompare(b[1].name));
+  $("adminBody").innerHTML = `
+    <button class="btn primary" id="addStoreBtn">Add store</button>
+    <table class="mini-table"><thead><tr><th>Store</th><th>Entity</th><th>Accounts</th><th></th></tr></thead>
+    <tbody>${list.map(([id, s]) => {
+      const n = Object.values(state.accounts).filter(a => a.storeId === id && !a.activeTo).length;
+      return `<tr><td>${esc(s.name)}</td><td>${esc(s.entity || "")}</td><td>${n} active</td>
+        <td class="act"><button data-edit="${esc(id)}">Edit</button></td></tr>`;
+    }).join("")}</tbody></table>`;
+  $("addStoreBtn").addEventListener("click", () => storeWizard());
+  $("adminBody").querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => storeWizard(b.dataset.edit)));
+}
+
+function storeWizard(editId) {
+  const s = editId ? state.stores[editId] : { name: "", entity: "", active: true };
+  const storeOpts = Object.entries(state.stores).sort((a,b)=>a[1].name.localeCompare(b[1].name))
+    .map(([id, st]) => `<option value="${esc(id)}">${esc(st.name)}</option>`).join("");
+  const ymNow = ymKey(state.ui.year, state.ui.month);
+  openModal(`
+    <h2>${editId ? "Edit store" : "Add store"}</h2>
+    <div class="sub">${editId ? "" : "This is the only place a new store is added. Clone its vendor list from a similar store, then fill in account numbers as they arrive."}</div>
+    <div class="row2">
+      <div><label>Store name</label><input type="text" id="stName" value="${esc(s.name)}"></div>
+      <div><label>Entity</label><input type="text" id="stEntity" value="${esc(s.entity || "")}" placeholder="e.g. DPR"></div>
+    </div>
+    ${editId ? "" : `
+      <label>Copy vendor accounts from</label>
+      <select id="stTemplate"><option value="">Start empty — add accounts by hand</option>${storeOpts}</select>
+      <div id="tplList"></div>
+      <label>Tracking starts</label>
+      <input type="text" id="stFrom" value="${ymNow}" placeholder="YYYY-MM">`}
+    <div class="actions">
+      ${editId ? `<button class="btn danger" id="stRetire">Retire store &amp; end its accounts…</button>` : ""}
+      <button class="btn" id="stCancel">Cancel</button>
+      <button class="btn primary" id="stSave">${editId ? "Save changes" : "Add store"}</button>
+    </div>`);
+  $("stCancel").addEventListener("click", () => openAdmin("stores"));
+
+  if (!editId) $("stTemplate").addEventListener("change", (e) => {
+    const tid = e.target.value;
+    if (!tid) return $("tplList").innerHTML = "";
+    const accs = Object.entries(state.accounts).filter(([,a]) => a.storeId === tid && !a.activeTo)
+      .sort((a,b) => a[1].vendor.localeCompare(b[1].vendor));
+    $("tplList").innerHTML = `<div class="checklist">${accs.map(([id,a]) =>
+      `<label><input type="checkbox" checked value="${esc(id)}"> ${esc(a.vendor)} <span class="acct">(${esc(a.book)}${a.last4 ? " · …" + esc(a.last4) : ""})</span></label>`).join("")}</div>`;
+  });
+
+  $("stSave").addEventListener("click", async () => {
+    const name = $("stName").value.trim();
+    if (!name) return toast("Store needs a name.", true);
+    const sid = editId || slug(name);
+    try {
+      await fb.setDoc(fb.doc(fb.db, "stores", sid), { name, entity: $("stEntity").value.trim(), active: true }, { merge: true });
+      if (!editId) {
+        const from = ($("stFrom").value.trim().match(/^\d{4}-\d{2}$/) || [ymNow])[0];
+        const picked = [...$("modalBox").querySelectorAll("#tplList input:checked")].map(i => i.value);
+        const batch = fb.writeBatch(fb.db);
+        for (const srcId of picked) {
+          const src = state.accounts[srcId];
+          const aid = `${src.book.toLowerCase()}--${src.vendorId}--${sid}--new-${Math.random().toString(36).slice(2,6)}`;
+          batch.set(fb.doc(fb.db, "accounts", aid), { ...src,
+            store: name, storeId: sid, accountNumber: "", last4: "",
+            activeFrom: from, activeTo: null, notes: "Cloned from " + src.store + " — fill in account #",
+          });
+        }
+        await batch.commit();
+        toast(picked.length ? `Added ${name} with ${picked.length} vendor accounts.` : `Added ${name}.`);
+      } else toast("Store saved.");
+      if (editId) {
+        // keep denormalized names in sync on that store's accounts
+        const batch = fb.writeBatch(fb.db);
+        Object.entries(state.accounts).forEach(([aid, a]) => { if (a.storeId === sid && a.store !== name) batch.update(fb.doc(fb.db,"accounts",aid), { store: name }); });
+        await batch.commit();
+      }
+      openAdmin("stores");
+    } catch (e) { toast("Save failed.", true); console.error(e); }
+  });
+
+  if (editId) $("stRetire").addEventListener("click", async () => {
+    const ymEnd = prompt("Last tracked month for this store (YYYY-MM)?", ymKey(state.ui.year, state.ui.month));
+    if (!ymEnd || !/^\d{4}-\d{2}$/.test(ymEnd)) return;
+    try {
+      const batch = fb.writeBatch(fb.db);
+      Object.entries(state.accounts).forEach(([aid, a]) => { if (a.storeId === editId && !a.activeTo) batch.update(fb.doc(fb.db,"accounts",aid), { activeTo: ymEnd }); });
+      batch.update(fb.doc(fb.db,"stores",editId), { active: false });
+      await batch.commit();
+      toast("Store retired — its accounts end " + ymEnd + ". History stays visible.");
+      openAdmin("stores");
+    } catch (e) { toast("Retire failed.", true); console.error(e); }
+  });
+}
+
+/* ---- Vendors tab ---- */
+function renderAdminVendors() {
+  const list = Object.entries(state.vendors).sort((a,b) => a[1].name.localeCompare(b[1].name));
+  $("adminBody").innerHTML = `
+    <div class="row2"><input type="text" id="newVendor" placeholder="New vendor name"><button class="btn primary" id="addVendorBtn">Add vendor</button></div>
+    <table class="mini-table"><tbody>${list.map(([id,v]) => {
+      const n = Object.values(state.accounts).filter(a => a.vendorId === id).length;
+      return `<tr><td>${esc(v.name)}</td><td>${n} accounts</td></tr>`;
+    }).join("")}</tbody></table>`;
+  $("addVendorBtn").addEventListener("click", async () => {
+    const name = $("newVendor").value.trim();
+    if (!name) return;
+    await fb.setDoc(fb.doc(fb.db, "vendors", slug(name)), { name });
+    toast("Vendor added."); openAdmin("vendors");
+  });
+}
+
+/* ---- Accounts tab ---- */
+function renderAdminAccounts() {
+  $("adminBody").innerHTML = `
+    <div class="row2">
+      <input type="text" id="accFilter" placeholder="Filter accounts…">
+      <button class="btn primary" id="addAccBtn">Add account</button>
+    </div>
+    <div id="accList"></div>`;
+  const draw = () => {
+    const q = ($("accFilter").value || "").toLowerCase();
+    const list = Object.entries(state.accounts)
+      .filter(([,a]) => !q || `${a.vendor} ${a.store} ${a.accountNumber}`.toLowerCase().includes(q))
+      .sort((a,b) => a[1].vendor.localeCompare(b[1].vendor) || a[1].store.localeCompare(b[1].store))
+      .slice(0, 150);
+    $("accList").innerHTML = `<table class="mini-table"><thead><tr><th>Vendor</th><th>Store</th><th>Acct #</th><th>Log</th><th>Active</th><th></th></tr></thead>
+      <tbody>${list.map(([id,a]) => `<tr><td>${esc(a.vendor)}</td><td>${esc(a.store)}</td><td class="acct">${esc(a.accountNumber || "—")}</td>
+      <td>${esc(a.book)}</td><td class="acct">${esc(a.activeFrom)}${a.activeTo ? " → " + esc(a.activeTo) : ""}</td>
+      <td class="act"><button data-eda="${esc(id)}">Edit</button></td></tr>`).join("")}</tbody></table>
+      ${Object.keys(state.accounts).length > 150 && list.length === 150 ? `<div class="sub">Showing first 150 — narrow with the filter.</div>` : ""}`;
+    $("accList").querySelectorAll("[data-eda]").forEach(b => b.addEventListener("click", () => accountForm(b.dataset.eda)));
+  };
+  $("accFilter").addEventListener("input", draw);
+  $("addAccBtn").addEventListener("click", () => accountForm(null));
+  draw();
+}
+
+function accountForm(editId) {
+  const a = editId ? state.accounts[editId] : {
+    vendorId:"", storeId:"", accountNumber:"", book:"BK", billType:"ACH",
+    estReceival:"", estInvoice:"", estDue:"", activeFrom: ymKey(state.ui.year, state.ui.month), activeTo:null, notes:"",
+  };
+  const vOpts = Object.entries(state.vendors).sort((x,y)=>x[1].name.localeCompare(y[1].name))
+    .map(([id,v]) => `<option value="${esc(id)}" ${id===a.vendorId?"selected":""}>${esc(v.name)}</option>`).join("");
+  const sOpts = Object.entries(state.stores).sort((x,y)=>x[1].name.localeCompare(y[1].name))
+    .map(([id,s]) => `<option value="${esc(id)}" ${id===a.storeId?"selected":""}>${esc(s.name)}</option>`).join("");
+  const books = [...new Set(["BK","DPR", ...Object.values(state.accounts).map(x => x.book)])];
+  openModal(`
+    <h2>${editId ? "Edit account" : "Add account"}</h2>
+    <div class="row2">
+      <div><label>Vendor</label><select id="afVendor"><option value="">Choose…</option>${vOpts}</select></div>
+      <div><label>Store</label><select id="afStore"><option value="">Choose…</option>${sOpts}</select></div>
+    </div>
+    <div class="row2">
+      <div><label>Account #</label><input type="text" id="afAcct" value="${esc(a.accountNumber)}"></div>
+      <div><label>Log</label><select id="afBook">${books.map(b => `<option ${b===a.book?"selected":""}>${esc(b)}</option>`).join("")}</select></div>
+    </div>
+    <div class="row3">
+      <div><label>Est. receival (day of month)</label><input type="text" id="afRcv" value="${esc(a.estReceival)}" placeholder="e.g. 22-23"></div>
+      <div><label>Est. invoice date</label><input type="text" id="afInv" value="${esc(a.estInvoice)}"></div>
+      <div><label>Est. due / draft</label><input type="text" id="afDue" value="${esc(a.estDue)}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Tracked from (YYYY-MM)</label><input type="text" id="afFrom" value="${esc(a.activeFrom)}"></div>
+      <div><label>Tracked until (blank = ongoing)</label><input type="text" id="afTo" value="${esc(a.activeTo || "")}"></div>
+    </div>
+    <label>Notes</label><input type="text" id="afNotes" value="${esc(a.notes || "")}">
+    <div class="actions">
+      <button class="btn" id="afCancel">Cancel</button>
+      <button class="btn primary" id="afSave">${editId ? "Save changes" : "Add account"}</button>
+    </div>`);
+  $("afCancel").addEventListener("click", () => openAdmin("accounts"));
+  $("afSave").addEventListener("click", async () => {
+    const vId = $("afVendor").value, sId = $("afStore").value;
+    if (!vId || !sId) return toast("Pick a vendor and a store.", true);
+    const from = $("afFrom").value.trim(), to = $("afTo").value.trim();
+    if (!/^\d{4}-\d{2}$/.test(from) || (to && !/^\d{4}-\d{2}$/.test(to))) return toast("Dates need the YYYY-MM format.", true);
+    const acct = $("afAcct").value.trim();
+    const digits = acct.replace(/\D/g,"");
+    const book = $("afBook").value.trim() || "BK";
+    const rec = {
+      vendorId: vId, vendor: state.vendors[vId].name,
+      storeId: sId, store: state.stores[sId].name,
+      accountNumber: acct, last4: digits.slice(-4),
+      book, billType: "ACH",
+      estReceival: $("afRcv").value.trim(), estInvoice: $("afInv").value.trim(), estDue: $("afDue").value.trim(),
+      activeFrom: from, activeTo: to || null, notes: $("afNotes").value.trim(),
+    };
+    const aid = editId || `${book.toLowerCase()}--${vId}--${sId}--${digits.slice(-4) || Math.random().toString(36).slice(2,6)}`;
+    try { await fb.setDoc(fb.doc(fb.db, "accounts", aid), rec, { merge: true }); toast("Account saved."); openAdmin("accounts"); }
+    catch (e) { toast("Save failed.", true); console.error(e); }
+  });
+}
+
+/* ---- FindMi sync tab ---- */
+function renderAdminSync() {
+  $("adminBody").innerHTML = `
+    <div class="note">Pulls the store directory from your FindMi API and proposes any stores that aren't in this log yet, with their entity filled in. Nothing is added until you confirm.</div>
+    <label>FindMi API URL</label>
+    <input type="url" id="fmUrl" value="${esc(state.settings.findmiUrl || "")}" placeholder="https://…vercel.app/api/dpm-alignment">
+    <div class="actions" style="justify-content:flex-start">
+      <button class="btn primary" id="fmFetch">Fetch stores</button>
+    </div>
+    <div id="fmResults"></div>`;
+  $("fmFetch").addEventListener("click", async () => {
+    const url = $("fmUrl").value.trim();
+    if (!url) return toast("Enter the FindMi API URL first.", true);
+    try { await fb.setDoc(fb.doc(fb.db, "settings", "app"), { findmiUrl: url }, { merge: true }); } catch {}
+    $("fmResults").innerHTML = `<div class="sub">Fetching…</div>`;
+    try {
+      const resp = await fetch(url + (url.includes("?") ? "&" : "?") + "_=" + Date.now(), { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const data = await resp.json();
+      const restaurants = data.restaurants || {};
+      const entities = data.entities || {};
+      const normName = (s) => String(s||"").toLowerCase().replace(/^bk\s+/,"").replace(/[^a-z0-9#]+/g,"");
+      const existing = new Set(Object.values(state.stores).map(s => normName(s.name)));
+      const proposals = [];
+      for (const r of Object.values(restaurants)) {
+        const name = (r.storeName || r.name || "").trim();
+        if (!name) continue;
+        const ent = (r.assignedEntityId && entities[r.assignedEntityId]?.name) || r.entity || "";
+        const short = name.replace(/^BK\s+/i, "");
+        if (!existing.has(normName(name)) && !existing.has(normName(short))) proposals.push({ name: short, entity: ent.trim() });
+      }
+      if (!proposals.length) {
+        $("fmResults").innerHTML = `<div class="note">Every FindMi store is already in the log — nothing to add.</div>`;
+        return;
+      }
+      $("fmResults").innerHTML = `
+        <div class="sub" style="margin-top:12px">New in FindMi — check the ones to add:</div>
+        <div class="checklist">${proposals.map((p,i) =>
+          `<label><input type="checkbox" checked data-i="${i}"> ${esc(p.name)} ${p.entity ? `<span class="acct">— ${esc(p.entity)}</span>` : ""}</label>`).join("")}</div>
+        <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="fmAdd">Add selected stores</button></div>`;
+      $("fmAdd").addEventListener("click", async () => {
+        const picked = [...$("fmResults").querySelectorAll("input:checked")].map(i => proposals[+i.dataset.i]);
+        const batch = fb.writeBatch(fb.db);
+        picked.forEach(p => batch.set(fb.doc(fb.db, "stores", slug(p.name)), { name: p.name, entity: p.entity, active: true }, { merge: true }));
+        await batch.commit();
+        toast(`Added ${picked.length} stores. Next: open each in Stores → Edit, or add their accounts with the clone wizard.`);
+        openAdmin("stores");
+      });
+    } catch (e) {
+      $("fmResults").innerHTML = `<div class="note warn">Couldn't reach FindMi (${esc(e.message)}). If this keeps happening the API may not allow requests from this site — see the CORS note in the README.</div>`;
+    }
+  });
+}
+
+/* ---- Data tab: import / backup ---- */
+function renderAdminData() {
+  $("adminBody").innerHTML = `
+    <div class="note">Import loads the <b>seed.json</b> built from the 2026 workbooks: stores, vendors, accounts, and every Y already marked Jan–Aug. Re-importing merges — it won't wipe marks made in the app.</div>
+    <div class="note warn">Don't commit seed.json to the GitHub repo — it contains account numbers. Import it here, then keep it somewhere private.</div>
+    <label>Seed file</label>
+    <input type="file" id="seedFile" accept="application/json">
+    <div class="actions" style="justify-content:flex-start">
+      <button class="btn primary" id="importBtn">Import</button>
+      <button class="btn" id="backupBtn">Download full backup (JSON)</button>
+    </div>
+    <div id="importLog" class="sub"></div>`;
+  $("importBtn").addEventListener("click", importSeed);
+  $("backupBtn").addEventListener("click", () => {
+    const dump = { meta: { exported: new Date().toISOString() }, stores: state.stores, vendors: state.vendors, accounts: state.accounts, status: state.statusByYm, settings: state.settings };
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(dump, null, 1)], { type: "application/json" }));
+    a.download = `invoice-log-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click(); URL.revokeObjectURL(a.href);
+  });
+}
+
+async function importSeed() {
+  const f = $("seedFile").files[0];
+  if (!f) return toast("Choose the seed.json file first.", true);
+  const log = (m) => $("importLog").textContent = m;
+  let seed;
+  try { seed = JSON.parse(await f.text()); } catch { return toast("That file isn't valid JSON.", true); }
+  if (!seed.accounts || !seed.stores) return toast("This doesn't look like a seed file (missing stores/accounts).", true);
+  try {
+    const writes = [];
+    Object.entries(seed.stores  || {}).forEach(([id,d]) => writes.push(["stores", id, d]));
+    Object.entries(seed.vendors || {}).forEach(([id,d]) => writes.push(["vendors", id, d]));
+    Object.entries(seed.accounts|| {}).forEach(([id,d]) => writes.push(["accounts", id, d]));
+    Object.entries(seed.status  || {}).forEach(([id,d]) => writes.push(["status", id, d]));
+    let done = 0;
+    for (let i = 0; i < writes.length; i += 400) {
+      const batch = fb.writeBatch(fb.db);
+      writes.slice(i, i + 400).forEach(([c, id, d]) => batch.set(fb.doc(fb.db, c, id), d, { merge: true }));
+      await batch.commit();
+      done += Math.min(400, writes.length - i);
+      log(`Imported ${done} of ${writes.length} records…`);
+    }
+    log("");
+    toast(`Import complete — ${Object.keys(seed.accounts).length} accounts across ${Object.keys(seed.stores).length} stores.`);
+  } catch (e) { toast("Import failed partway — safe to re-run, it merges.", true); console.error(e); }
+}
+</script>
+</body>
+</html>
