@@ -456,6 +456,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MAX_CHIPS = 4;
+const NON_BK_WORDS = /paradise|quick\s*stop|car\s*wash|travel\s*stop|subway|grocery|grill|market|exxon|sonic|shell|valero/i;
 const ymKey = (y, m) => `${y}-${String(m).padStart(2,"0")}`;
 const slug = (s) => String(s||"").normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"") || "x";
 
@@ -683,32 +684,45 @@ function storeParts(name) {
   const city = s.replace(/#/g, " ").replace(/\s+/g, " ").trim().replace(/^[\s,-]+|[\s,-]+$/g, "");
   return { city, num };
 }
-/** Known store numbers, keyed by normalized name (from the name itself or the FindMi-filled number field). */
-function storeNumMap() {
+/** Is this a Burger King, or another brand (Paradise Quick Stop, Subway, a car wash...)?
+    Precedence: the store's saved brand > the name itself > non-BK brand words > has ACH accounts. */
+function brandOf(store, sid) {
+  if (store.brand) return store.brand;                                   // set by hand or by FindMi
+  if (/burger\s*king|(^|\s)bk(\s|#|$)/i.test(store.name)) return "BK";
+  if (NON_BK_WORDS.test(store.name)) return "OTHER";
+  if (sid && Object.values(state.accounts).some(a => a.storeId === sid)) return "BK";  // in the BK/DPR invoice logs
+  return "OTHER";
+}
+/** Lookup by normalized name -> { brand, num }, so display works from a denormalized name string. */
+function storeInfo() {
   if (_numMap) return _numMap;
   _numMap = {};
-  for (const s of Object.values(state.stores)) {
+  for (const [sid, s] of Object.entries(state.stores)) {
     const key = fmNorm(s.name);
-    const num = storeParts(s.name).num || s.number || "";
-    if (key && num) _numMap[key] = num;
+    if (!key) continue;
+    _numMap[key] = { brand: brandOf(s, sid), num: storeParts(s.name).num || s.number || "" };
   }
   return _numMap;
 }
-/** Display-only store name standardization: "BK City #Number". Root data is never changed.
-    Non-BK locations (Paradise Quick Stops) pass through untouched. */
+/** Display-only standardization. Burger Kings render "BK City #Number"; every other
+    brand is left exactly as it is. Root data is never changed. */
 function dspStore(name) {
   const raw = String(name || "").trim();
-  if (!raw || /consolidated|paradise|quick\s*stop/i.test(raw)) return raw;
+  if (!raw || /consolidated/i.test(raw)) return raw;
+  const info = storeInfo()[fmNorm(raw)];
+  const isBK = info ? info.brand === "BK"
+                    : (/burger\s*king|(^|\s)bk(\s|#|$)/i.test(raw) && !NON_BK_WORDS.test(raw));
+  if (!isBK) return raw;
   const { city, num } = storeParts(raw);
   if (!city && !num) return raw;
-  const n = num || storeNumMap()[fmNorm(raw)] || "";
+  const n = num || (info && info.num) || "";
   return "BK " + (city || "Store") + (n ? " #" + n : "");
 }
 /** Alphabetize by city (so "Burger King #13917 Belton" sorts under B for Belton). */
 function storeSortKey(name) {
   const raw = String(name || "");
   if (/consolidated/i.test(raw)) return "zzz " + raw.toLowerCase();
-  if (/paradise|quick\s*stop/i.test(raw)) return raw.toLowerCase();
+  if (dspStore(raw) === raw && !/^bk\b/i.test(raw)) return raw.toLowerCase();   // other brands: plain name
   const p = storeParts(raw);
   return (p.city || raw).toLowerCase() + " " + p.num;
 }
@@ -1207,6 +1221,7 @@ function renderAdminStores() {
     <div class="row2" style="align-items:center">
       <button class="btn primary" id="addStoreBtn">Add store</button>
       <button class="btn" id="dupBtn">Find duplicates…</button>
+      <button class="btn" id="stdBtn">Standardize names…</button>
       <button class="btn" id="fmOpen">Compare with FindMi…</button>
     </div>
     <div id="fmSection" class="hidden">
@@ -1224,6 +1239,7 @@ function renderAdminStores() {
     ${merged ? `<div class="sub">${merged} merged duplicate${merged>1?"s":""} hidden — their history lives on under the store they merged into.</div>` : ""}`;
   $("addStoreBtn").addEventListener("click", () => storeWizard());
   $("dupBtn").addEventListener("click", mergeWizard);
+  $("stdBtn").addEventListener("click", standardizeWizard);
   $("fmUrl").value = state.settings.findmiUrl || "";
   $("fmOpen").addEventListener("click", () => {
     $("fmSection").classList.toggle("hidden");
@@ -1242,10 +1258,16 @@ function storeWizard(editId) {
   openModal(`
     <h2>${editId ? "Edit store" : "Add store"}</h2>
     <div class="sub">${editId ? "" : "This is the only place a new store is added. Clone its vendor list from a similar store, then fill in account numbers as they arrive."}</div>
-    <div class="row2">
+    <div class="row3">
       <div><label>Store name</label><input type="text" id="stName" value="${esc(s.name)}"></div>
+      <div><label>Store number</label><input type="text" id="stNumber" value="${esc(editId ? (storeParts(s.name).num || s.number || "") : "")}" placeholder="e.g. 26924"></div>
       <div><label>Entity</label><input type="text" id="stEntity" value="${esc(s.entity || "")}" placeholder="e.g. DPR"></div>
     </div>
+    <label>Brand <span class="acct">(controls how the name is displayed everywhere)</span></label>
+    <select id="stBrand">
+      <option value="BK" ${(editId ? brandOf(s, editId) : "BK") === "BK" ? "selected" : ""}>Burger King — show as "BK City #Number"</option>
+      <option value="OTHER" ${(editId ? brandOf(s, editId) : "BK") === "OTHER" ? "selected" : ""}>Other brand — show the name exactly as typed</option>
+    </select>
     ${editId ? "" : `
       <label>Copy vendor accounts from</label>
       <select id="stTemplate"><option value="">Start empty — add accounts by hand</option>${storeOpts}</select>
@@ -1274,7 +1296,11 @@ function storeWizard(editId) {
     if (!name) return toast("Store needs a name.", true);
     const sid = editId || slug(name);
     try {
-      await fb.setDoc(fb.doc(fb.db, "stores", sid), { name, entity: $("stEntity").value.trim(), active: true }, { merge: true });
+      await fb.setDoc(fb.doc(fb.db, "stores", sid), {
+        name, entity: $("stEntity").value.trim(), active: true,
+        brand: $("stBrand").value,
+        number: ($("stNumber") ? $("stNumber").value.trim().replace(/[^0-9]/g, "") : ""),
+      }, { merge: true });
       if (!editId) {
         const from = ($("stFrom").value.trim().match(/^\d{4}-\d{2}$/) || [ymNow])[0];
         if (!backdateOk(from)) return;
@@ -1312,6 +1338,59 @@ function storeWizard(editId) {
       toast("Store retired — its accounts end " + ymEnd + ". History stays visible.");
       openAdmin("stores");
     } catch (e) { toast("Retire failed — " + explainError(e), true); DIAG.err("retire", e.code||e.message); console.error(e); }
+  });
+}
+
+/* ---- Standardize display names: pull missing store numbers + brands from FindMi ---- */
+async function standardizeWizard() {
+  const url = state.settings.findmiUrl || $("fmUrl").value.trim();
+  if (!url) { toast("Add your FindMi API URL first (Compare with FindMi).", true); return; }
+  openModal(`<h2>Standardize store names</h2><div class="sub">Reading FindMi…</div>`);
+  let fmList;
+  try { fmList = await fetchFindmi(url); }
+  catch (e) {
+    $("modalBox").innerHTML = `<h2>Standardize store names</h2>
+      <div class="note warn">Couldn't reach FindMi (${esc(e.message)}).</div>
+      <div class="actions"><button class="btn" onclick="document.getElementById('overlay').classList.remove('open')">Close</button></div>`;
+    return;
+  }
+  const d = diffFindmi(fmList);
+  const rows = d.matched.filter(m => m.numFill || m.brandFill);
+  const stillBare = Object.entries(state.stores).filter(([sid, s]) =>
+    !s.mergedInto && brandOf(s, sid) === "BK" && !(storeParts(s.name).num || s.number)
+    && !rows.some(m => m.sid === sid));
+  $("modalBox").className = "modal wide";
+  $("modalBox").innerHTML = `
+    <h2>Standardize store names</h2>
+    <div class="sub">Fills in the store number and brand that FindMi knows, so every Burger King reads <b>BK City #Number</b>. This only changes how names are <i>displayed</i> — no accounts, no marks, no counts.</div>
+    ${rows.length ? `<div class="fm-sec"><h4>Will be completed (${rows.length})</h4>
+      ${rows.map(m => { const s = state.stores[m.sid];
+        return `<div class="fm-row"><span class="grow">${esc(s.name)}</span>
+          <span class="how">→ <b>${esc(m.numFill ? dspStore(s.name).replace(/\s*#\d+$/, "") + " #" + m.numFill : dspStore(s.name))}</b>${m.brandFill && m.brandFill !== "BK" ? " (other brand — left as typed)" : ""}</span></div>`;
+      }).join("")}</div>` : `<div class="fm-sec"><h4>Nothing to fill</h4><div class="fm-row">Every matched store already has its number and brand.</div></div>`}
+    ${stillBare.length ? `<div class="fm-sec"><h4>FindMi has no number for these (${stillBare.length})</h4>
+      <div class="fm-row"><span class="how">Set them by hand in Stores → Edit → Store number: ${stillBare.map(([, s]) => esc(s.name)).join(", ")}</span></div></div>` : ""}
+    <div class="actions">
+      <button class="btn" id="sdCancel">Cancel</button>
+      ${rows.length ? `<button class="btn primary" id="sdGo">Apply to ${rows.length} store${rows.length > 1 ? "s" : ""}</button>` : ""}
+    </div>`;
+  $("sdCancel").addEventListener("click", () => openAdmin("stores"));
+  const go = $("sdGo");
+  if (go) go.addEventListener("click", async () => {
+    try {
+      const batch = fb.writeBatch(fb.db);
+      rows.forEach(m => {
+        const upd = {};
+        if (m.numFill) upd.number = m.numFill;
+        if (m.brandFill) upd.brand = m.brandFill;
+        if (m.needsLink) upd.findmiId = m.fm.fmId;
+        batch.set(fb.doc(fb.db, "stores", m.sid), upd, { merge: true });
+      });
+      await batch.commit();
+      _numMap = null;
+      toast(`Standardized ${rows.length} store name${rows.length > 1 ? "s" : ""} — display only, nothing else touched.`);
+      openAdmin("stores");
+    } catch (e) { toast("Couldn't save — " + explainError(e), true); DIAG.err("standardize", e.code || e.message); }
   });
 }
 
@@ -1646,7 +1725,8 @@ async function fetchFindmi(url) {
     if (!raw) continue;
     const entity = ((r.assignedEntityId && entities[r.assignedEntityId]?.name) || r.entity || "").trim();
     out.push({ fmId, name: raw.replace(/^BK\s+/i, ""), entity,
-      number: String(r.storeNumber ?? "").trim() || storeParts(raw).num });
+      brand: (/burger\s*king|^\s*bk\b/i.test(raw) && !NON_BK_WORDS.test(raw)) ? "BK" : "OTHER",
+      number: String(r.storeNumber ?? "").replace(/[^0-9]/g, "") || storeParts(raw).num });
   }
   return out;
 }
@@ -1685,6 +1765,7 @@ function diffFindmi(fmList) {
       matched.push({ fm, sid: m.sid, how: m.how,
         needsLink: s.findmiId !== fm.fmId,
         numFill: !ourNum && fm.number ? fm.number : null,
+        brandFill: !s.brand ? fm.brand : null,
         entityDiff: fm.entity && fm.entity !== (s.entity || "") ? fm.entity : null,
         retiredHere: s.active === false });
     } else news.push(fm);
@@ -1768,6 +1849,7 @@ async function runFindmiCompare() {
       const upd = {};
       if (m.needsLink) upd.findmiId = m.fm.fmId;
       if (m.numFill) upd.number = m.numFill;
+      if (m.brandFill) upd.brand = m.brandFill;
       const entCb = box.querySelector(`[data-ent="${CSS.escape(m.sid)}"]`);
       if (entCb && entCb.checked) upd.entity = entCb.dataset.val;
       const resCb = box.querySelector(`[data-resume="${CSS.escape(m.sid)}"]`);
@@ -1780,7 +1862,7 @@ async function runFindmiCompare() {
       const cb = box.querySelector(`[data-new="${i}"]`);
       if (!cb || !cb.checked) return;
       const sid = slug(p.name);
-      writes.push(["set", "stores", sid, { name: p.name, entity: p.entity, active: true, findmiId: p.fmId }]);
+      writes.push(["set", "stores", sid, { name: p.name, entity: p.entity, active: true, findmiId: p.fmId, brand: p.brand, number: p.number || "" }]);
       addedStores++;
       const tpl = box.querySelector(`[data-tpl="${i}"]`)?.value;
       if (tpl) for (const [srcId, src] of Object.entries(state.accounts)) {
@@ -1803,7 +1885,7 @@ async function runFindmiCompare() {
     }
     if (!writes.length) return toast("Nothing selected — no changes made.");
     // ---- pre-flight: show exactly what will happen before anything is written ----
-    const linked = d.matched.filter(m => m.needsLink || m.numFill).length;
+    const linked = d.matched.filter(m => m.needsLink || m.numFill || m.brandFill).length;
     const numFills = d.matched.filter(m => m.numFill).length;
     const lines = [];
     if (addedStores) lines.push(`Add <b>${addedStores}</b> store${addedStores>1?"s":""}${addedAccounts ? ` with <b>${addedAccounts}</b> cloned vendor accounts` : ""} — counted from <b>${ymNow}</b> onward only.`);
