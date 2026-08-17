@@ -203,6 +203,64 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 .gate code{background:var(--paper); border-radius:6px; padding:2px 6px; font-size:.78rem}
 .gate ol{padding-left:18px; font-size:.82rem; color:var(--ink)}
 .hidden{display:none!important}
+/* Calendar view */
+.cal-wrap{padding:12px}
+.cal-dows{display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:6px}
+.cal-dows div{font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:0 4px}
+.cal{display:grid; grid-template-columns:repeat(7,1fr); gap:6px}
+.cal-cell{background:var(--card); border:1px solid var(--line); border-radius:9px; min-height:104px; padding:6px; display:flex; flex-direction:column; gap:4px; min-width:0}
+.cal-cell.blank{background:transparent; border:0; min-height:0}
+.cal-cell.quiet{background:transparent}
+.cal-cell.today{outline:2px solid var(--navy); outline-offset:-1px}
+.cal-dhead{display:flex; align-items:center; justify-content:space-between; gap:4px}
+.cal-dnum{font-weight:800; font-size:.78rem; background:none; border:0; cursor:pointer; color:var(--ink); padding:2px 6px; border-radius:6px}
+.cal-dnum:hover{background:var(--navy-soft)}
+.cal-dnum[disabled]{cursor:default; color:var(--muted); background:none}
+.cal-dcount{font-size:.66rem; font-weight:800; color:var(--red)}
+.cal-dcount.done{color:var(--saved)}
+.cal-chips{display:flex; flex-direction:column; gap:3px; min-width:0}
+.chip{display:block; width:100%; border:1px solid var(--line); background:var(--paper); border-radius:6px; padding:2px 6px; font-size:.68rem; cursor:pointer; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink)}
+.chip b{font-weight:700}
+.chip .st{color:var(--muted)}
+.chip:hover{border-color:var(--navy)}
+.chip.saved{background:var(--saved-soft); border-color:#bfe3cf; color:var(--saved)}
+.chip.saved .st{color:inherit; opacity:.72}
+.chip.flag{background:var(--flag-soft); border-color:#ecd3a8; color:var(--flag)}
+.chip.flag .st{color:inherit; opacity:.75}
+.cal-more{background:none; border:0; color:var(--navy); font-size:.66rem; font-weight:700; cursor:pointer; text-align:left; padding:1px 6px}
+.cal-more:hover{text-decoration:underline}
+.cal-unsched{margin-top:12px; background:var(--card); border:1px dashed var(--line); border-radius:9px; padding:8px 10px}
+.cal-unsched h4{margin:0 0 6px; font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted)}
+.cal-unsched .cal-chips{flex-direction:row; flex-wrap:wrap}
+.cal-unsched .chip{width:auto; max-width:240px}
+@media (max-width:760px){ .cal-cell{min-height:70px; padding:4px} .chip .st{display:none} }
+/* Tiles view */
+.tiles{display:grid; grid-template-columns:repeat(auto-fill, minmax(215px, 1fr)); gap:10px; padding:12px}
+.tiles .thead{grid-column:1/-1; display:flex; align-items:baseline; gap:8px; font-weight:800; font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; color:var(--navy-deep); margin-top:6px}
+.tiles .thead .gcount{font-weight:700; color:var(--muted); text-transform:none; letter-spacing:0}
+.tile{background:var(--card); border:1px solid var(--line); border-left:4px solid var(--red); border-radius:10px; padding:10px 10px 8px; display:flex; flex-direction:column; gap:3px; box-shadow:var(--shadow); cursor:pointer; min-width:0}
+.tile.saved{border-left-color:var(--saved)}
+.tile.flag{border-left-color:var(--flag)}
+.tile .t-vendor{font-weight:800; font-size:.82rem; display:flex; gap:6px; align-items:center; min-width:0}
+.tile .t-vendor span.nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.tile .t-store{font-size:.78rem; color:var(--ink)}
+.tile .t-acct{font-size:.7rem; color:var(--muted); font-variant-numeric:tabular-nums}
+.tile .t-est{font-size:.68rem; color:var(--muted)}
+.tile .stamp{margin-top:6px; justify-content:flex-end}
+/* Account / day popups */
+.acc-facts{display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:.82rem; margin:10px 0}
+.acc-facts dt{color:var(--muted)} .acc-facts dd{margin:0; font-weight:600}
+.big-stamp{display:flex; gap:8px; margin-top:14px}
+.big-stamp button{flex:1; padding:12px 8px; border-radius:10px; border:1.5px solid var(--line); font-weight:800; font-size:.95rem; cursor:pointer; background:var(--card); color:var(--ink)}
+.big-stamp .y.on{background:var(--saved); border-color:var(--saved); color:#fff}
+.big-stamp .n.on{background:var(--flag); border-color:var(--flag); color:#fff}
+.big-stamp button:hover{border-color:var(--navy)}
+.acc-meta{font-size:.72rem; color:var(--muted); margin-top:8px; min-height:1em}
+.dm-row{display:flex; align-items:center; gap:10px; padding:8px 2px; border-bottom:1px solid var(--line)}
+.dm-row:last-child{border-bottom:0}
+.dm-row .who{flex:1; min-width:0; font-size:.82rem}
+.dm-row .who .acct{font-size:.7rem; color:var(--muted)}
+.dm-row .est{font-size:.7rem; color:var(--muted); white-space:nowrap}
 /* Diagnostics panel */
 .diag{position:fixed; right:14px; bottom:14px; width:min(580px, calc(100vw - 28px)); max-height:72vh; background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:0 18px 50px rgba(20,16,74,.28); z-index:120; display:flex; flex-direction:column; font-size:.82rem}
 .diag-head{display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--line)}
@@ -276,9 +334,22 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
     <select id="fBook" aria-label="Filter by log"></select>
     <select id="fStore" aria-label="Filter by store"></select>
     <select id="fVendor" aria-label="Filter by vendor"></select>
-    <div class="seg" role="group" aria-label="Group rows by">
-      <button id="gbVendor" class="on">By vendor</button>
-      <button id="gbStore">By store</button>
+    <select id="fStatus" aria-label="Filter by status">
+      <option value="">All statuses</option>
+      <option value="pending">Pending</option>
+      <option value="Y">Saved (Y)</option>
+      <option value="N">Marked N</option>
+    </select>
+    <select id="gSort" aria-label="Group by" title="How tiles and the list are grouped">
+      <option value="vendor">Group: vendor</option>
+      <option value="store">Group: store</option>
+      <option value="date">Group: date</option>
+      <option value="status">Group: status</option>
+    </select>
+    <div class="seg" role="group" aria-label="View">
+      <button id="vwCal" class="on">Calendar</button>
+      <button id="vwTiles">Tiles</button>
+      <button id="vwList">List</button>
     </div>
     <button class="btn" id="csvBtn" title="Download this month's view as CSV">CSV</button>
   </div>
@@ -287,6 +358,8 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 
   <div class="main">
     <div class="grid-wrap">
+      <div id="calWrap" class="cal-wrap hidden"></div>
+      <div id="tilesWrap" class="tiles hidden"></div>
       <div class="table-scroll">
         <table class="grid" id="gridTable">
           <thead>
@@ -360,6 +433,7 @@ window.addEventListener("unhandledrejection", (e) =>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MAX_CHIPS = 4;
 const ymKey = (y, m) => `${y}-${String(m).padStart(2,"0")}`;
 const slug = (s) => String(s||"").normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"") || "x";
 
@@ -368,7 +442,8 @@ const state = {
   stores: {}, vendors: {}, accounts: {}, statusByYm: {}, settings: {},
   ui: {
     year: new Date().getFullYear(), month: new Date().getMonth() + 1,
-    groupBy: "vendor", q: "", fBook: "", fStore: "", fVendor: "",
+    view: "calendar", groupBy: "vendor", q: "", fBook: "", fStore: "", fVendor: "", fStatus: "",
+    dayModal: null, accModal: null,
   },
   unsub: [], unsubStatus: null,
 };
@@ -575,7 +650,7 @@ function monthStats(ym, filterFn) {
   let expected = 0, saved = 0, flagged = 0;
   for (const [aid, acc] of Object.entries(state.accounts)) {
     if (!isActive(acc, ym)) continue;
-    if (filterFn && !filterFn(acc)) continue;
+    if (filterFn && !filterFn(acc, aid)) continue;
     expected++;
     const v = markOf(aid, ym)?.v || "";
     if (v === "Y") saved++; else if (v === "N") flagged++;
@@ -583,11 +658,15 @@ function monthStats(ym, filterFn) {
   return { expected, saved, flagged, missing: expected - saved };
 }
 
-function passesFilters(acc) {
+function passesFilters(acc, aid) {
   const u = state.ui;
   if (u.fBook && acc.book !== u.fBook) return false;
   if (u.fStore && acc.storeId !== u.fStore) return false;
   if (u.fVendor && acc.vendorId !== u.fVendor) return false;
+  if (u.fStatus && aid !== undefined) {
+    const v = markOf(aid, ymKey(u.year, u.month))?.v || "";
+    if (u.fStatus === "pending" ? v !== "" : v !== u.fStatus) return false;
+  }
   if (u.q) {
     const hay = `${acc.vendor} ${acc.store} ${acc.accountNumber} ${acc.last4}`.toLowerCase();
     if (!hay.includes(u.q.toLowerCase())) return false;
@@ -595,10 +674,12 @@ function passesFilters(acc) {
   return true;
 }
 
-async function setMark(aid, val) {
+function setMark(aid, val) {           // toggle: pressing the active button clears it
+  const cur = markOf(aid, ymKey(state.ui.year, state.ui.month))?.v || "";
+  return writeMark(aid, cur === val ? "" : val);
+}
+async function writeMark(aid, next) {  // explicit set ("Y" | "N" | "")
   const ym = ymKey(state.ui.year, state.ui.month);
-  const cur = markOf(aid, ym)?.v || "";
-  const next = (cur === val) ? "" : val;   // pressing the active button clears it
   try {
     await fb.setDoc(fb.doc(fb.db, "status", ym), {
       year: state.ui.year, month: state.ui.month,
@@ -608,7 +689,7 @@ async function setMark(aid, val) {
 }
 
 /* ---------------------------- Rendering ---------------------------- */
-function renderAll(){ renderYearSel(); renderMonthRail(); renderFilters(); renderSummary(); renderGrid(); renderSide(); }
+function renderAll(){ renderYearSel(); renderMonthRail(); renderFilters(); renderSummary(); renderMain(); renderSide(); renderOpenPopups(); }
 
 function knownYears() {
   const ys = new Set([new Date().getFullYear(), state.ui.year]);
@@ -675,35 +756,163 @@ function fmtWhen(at) {
   } catch { return ""; }
 }
 
-function renderGrid() {
-  const ym = ymKey(state.ui.year, state.ui.month);
-  const rows = Object.entries(state.accounts)
-    .filter(([,a]) => isActive(a, ym) && passesFilters(a));
-  const keyFn = state.ui.groupBy === "vendor" ? (a) => a.vendor : (a) => a.store;
-  rows.sort(([,a],[,b]) => keyFn(a).localeCompare(keyFn(b)) || a.store.localeCompare(b.store) || a.vendor.localeCompare(b.vendor));
+/* ------------- Views: Calendar · Tiles · List ------------- */
+/** "22-23" / "06-07" / "1" → {d1,d2}; unparseable → null (goes to the "no set day" bucket). */
+function parseRange(txt) {
+  const s = String(txt || "");
+  if (/next\s*month/i.test(s)) return null;
+  const m = s.match(/(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?/);
+  if (!m) return null;
+  const d1 = +m[1];
+  if (d1 < 1 || d1 > 31) return null;
+  let d2 = m[2] ? +m[2] : d1;
+  if (d2 < d1 || d2 > 31) d2 = d1;
+  return { d1, d2 };
+}
+function rangeLabel(r) { return r.d1 === r.d2 ? String(r.d1) : `${r.d1}–${r.d2}`; }
+function statusOf(aid, ym) { return markOf(aid, ym)?.v || ""; }
+function statusCls(v) { return v === "Y" ? "saved" : v === "N" ? "flag" : "pending"; }
+function statusWeight(v) { return v === "" ? 0 : v === "N" ? 1 : 2; }   // pending first, then N, then saved
 
-  const body = $("gridBody");
-  if (!rows.length) {
-    body.innerHTML = "";
-    const e = $("gridEmpty");
-    e.classList.remove("hidden");
-    e.innerHTML = Object.keys(state.accounts).length
-      ? `No accounts match these filters for ${MONTH_NAMES[state.ui.month-1]} ${state.ui.year}. <button class="btn" id="clearF">Clear filters</button>`
-      : `No accounts yet. Open <b>Manage → Data</b> to import your seed file, or add stores and accounts by hand.`;
-    const cf = $("clearF");
-    if (cf) cf.addEventListener("click", () => { state.ui.q = state.ui.fBook = state.ui.fStore = state.ui.fVendor = ""; $("q").value=""; renderAll(); });
-    return;
+function visibleRows(ym) {
+  return Object.entries(state.accounts).filter(([aid, a]) => isActive(a, ym) && passesFilters(a, aid));
+}
+
+function groupKeyOf(aid, a, ym) {
+  switch (state.ui.groupBy) {
+    case "store":  return { k: a.store, w: 0 };
+    case "date": {
+      const r = parseRange(a.estReceival);
+      return r ? { k: `Day ${String(r.d1).padStart(2,"0")}${r.d2>r.d1 ? "–"+String(r.d2).padStart(2,"0") : ""}`, w: 0 }
+               : { k: "No set day", w: 1 };
+    }
+    case "status": {
+      const v = statusOf(aid, ym);
+      return { k: v === "Y" ? "Saved" : v === "N" ? "Marked N — not available yet" : "Pending", w: statusWeight(v) };
+    }
+    default: return { k: a.vendor, w: 0 };
   }
-  $("gridEmpty").classList.add("hidden");
+}
 
-  let html = "", lastGroup = null;
+function groupedRows(rows, ym) {
+  return rows.map(([aid, a]) => ({ aid, a, g: groupKeyOf(aid, a, ym) }))
+    .sort((x, y) => x.g.w - y.g.w || x.g.k.localeCompare(y.g.k)
+      || x.a.vendor.localeCompare(y.a.vendor) || x.a.store.localeCompare(y.a.store));
+}
+
+function showEmptyState(rows) {
+  const e = $("gridEmpty");
+  if (rows.length) { e.classList.add("hidden"); return false; }
+  e.classList.remove("hidden");
+  e.innerHTML = Object.keys(state.accounts).length
+    ? `No accounts match these filters for ${MONTH_NAMES[state.ui.month-1]} ${state.ui.year}. <button class="btn" id="clearF">Clear filters</button>`
+    : `No accounts yet. Open <b>Manage → Data</b> to import your seed file, or add stores and accounts by hand.`;
+  const cf = $("clearF");
+  if (cf) cf.addEventListener("click", () => {
+    state.ui.q = state.ui.fBook = state.ui.fStore = state.ui.fVendor = state.ui.fStatus = "";
+    $("q").value = ""; renderAll();
+  });
+  return true;
+}
+
+function renderMain() {
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const rows = visibleRows(ym);
+  const v = state.ui.view;
+  $("calWrap").classList.toggle("hidden", v !== "calendar");
+  $("tilesWrap").classList.toggle("hidden", v !== "tiles");
+  document.querySelector(".table-scroll").classList.toggle("hidden", v !== "list");
+  ["vwCal","vwTiles","vwList"].forEach(id => $(id).classList.toggle("on",
+    { vwCal:"calendar", vwTiles:"tiles", vwList:"list" }[id] === v));
+  if (showEmptyState(rows)) { $("calWrap").innerHTML = ""; $("tilesWrap").innerHTML = ""; $("gridBody").innerHTML = ""; return; }
+  if (v === "calendar") renderCalendar(rows, ym);
+  else if (v === "tiles") renderTiles(rows, ym);
+  else renderList(rows, ym);
+}
+
+function chipHtml(aid, a, ym, r) {
+  const v = statusOf(aid, ym);
+  const t = `${a.vendor} · ${a.store} · ${a.accountNumber || "…"+a.last4}` + (r ? ` · est. day ${rangeLabel(r)}` : "") + " — click for details";
+  return `<button class="chip ${statusCls(v)}" data-acc="${esc(aid)}" title="${esc(t)}"><b>${esc(a.vendor)}</b> <span class="st">· ${esc(a.store)}</span></button>`;
+}
+
+function renderCalendar(rows, ym) {
+  const y = state.ui.year, m = state.ui.month;
+  const daysIn = new Date(y, m, 0).getDate();
+  const firstDow = new Date(y, m - 1, 1).getDay();
+  const today = new Date();
+  const isThisMonth = today.getFullYear() === y && today.getMonth() + 1 === m;
+
+  const byDay = {}, unsched = [];
   for (const [aid, a] of rows) {
-    const g = keyFn(a);
-    if (g !== lastGroup) {
-      const gStats = rows.filter(([,x]) => keyFn(x) === g);
-      const gSaved = gStats.filter(([id]) => markOf(id, ym)?.v === "Y").length;
-      html += `<tr class="ghead"><td colspan="7">${esc(g)}<span class="gcount">${gSaved}/${gStats.length}</span></td></tr>`;
-      lastGroup = g;
+    const r = parseRange(a.estReceival);
+    if (!r) { unsched.push([aid, a]); continue; }
+    (byDay[Math.min(r.d1, daysIn)] ||= []).push([aid, a, r]);
+  }
+  const daySort = (x, y2) => statusWeight(statusOf(x[0], ym)) - statusWeight(statusOf(y2[0], ym))
+    || x[1].vendor.localeCompare(y2[1].vendor);
+
+  let cells = "";
+  for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell blank"></div>`;
+  for (let d = 1; d <= daysIn; d++) {
+    const list = (byDay[d] || []).sort(daySort);
+    const savedC = list.filter(([aid]) => statusOf(aid, ym) === "Y").length;
+    const chips = list.slice(0, MAX_CHIPS).map(([aid, a, r]) => chipHtml(aid, a, ym, r)).join("");
+    const more = list.length > MAX_CHIPS ? `<button class="cal-more" data-day="${d}">+${list.length - MAX_CHIPS} more</button>` : "";
+    cells += `<div class="cal-cell ${isThisMonth && d === today.getDate() ? "today" : ""} ${list.length ? "" : "quiet"}">
+      <div class="cal-dhead"><button class="cal-dnum" data-day="${d}" ${list.length ? "" : "disabled"} title="Open this day">${d}</button>
+        ${list.length ? `<span class="cal-dcount ${savedC === list.length ? "done" : ""}">${savedC}/${list.length}</span>` : ""}</div>
+      <div class="cal-chips">${chips}${more}</div></div>`;
+  }
+  const un = unsched.length ? `<div class="cal-unsched"><h4>No set day (${unsched.length}) — est. receival isn't a day of the month</h4>
+      <div class="cal-chips">${unsched.map(([aid, a]) => chipHtml(aid, a, ym, null)).join("")}</div></div>` : "";
+  $("calWrap").innerHTML = `<div class="cal-dows">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => `<div>${d}</div>`).join("")}</div>
+    <div class="cal">${cells}</div>${un}`;
+  $("calWrap").querySelectorAll("[data-acc]").forEach(b => b.addEventListener("click", () => openAccountModal(b.dataset.acc)));
+  $("calWrap").querySelectorAll("[data-day]").forEach(b => b.addEventListener("click", () => openDayModal(+b.dataset.day)));
+}
+
+function renderTiles(rows, ym) {
+  const grouped = groupedRows(rows, ym);
+  let html = "", last = null;
+  for (const { aid, a, g } of grouped) {
+    if (g.k !== last) {
+      const inG = grouped.filter(r => r.g.k === g.k);
+      const savedC = inG.filter(r => statusOf(r.aid, ym) === "Y").length;
+      html += `<div class="thead">${esc(g.k)} <span class="gcount">${savedC}/${inG.length}</span></div>`;
+      last = g.k;
+    }
+    const v = statusOf(aid, ym);
+    const r = parseRange(a.estReceival);
+    html += `<div class="tile ${statusCls(v)}" data-acc="${esc(aid)}" role="button" tabindex="0">
+      <div class="t-vendor"><span class="nm">${esc(a.vendor)}</span>${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</div>
+      <div class="t-store">${esc(a.store)}</div>
+      <div class="t-acct">${esc(a.accountNumber || "…" + a.last4)}</div>
+      <div class="t-est">Est. rcv'l ${r ? rangeLabel(r) : esc(a.estReceival || "—")}</div>
+      <div class="stamp">
+        <button class="y ${v==="Y"?"on":""}" data-aid="${esc(aid)}" data-v="Y" aria-pressed="${v==="Y"}" title="Invoice downloaded and saved to the server">Y</button>
+        <button class="n ${v==="N"?"on":""}" data-aid="${esc(aid)}" data-v="N" aria-pressed="${v==="N"}" title="Checked — invoice not available yet">N</button>
+      </div></div>`;
+  }
+  $("tilesWrap").innerHTML = html;
+  $("tilesWrap").querySelectorAll(".stamp button").forEach(b =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); setMark(b.dataset.aid, b.dataset.v); }));
+  $("tilesWrap").querySelectorAll(".tile").forEach(t => {
+    t.addEventListener("click", () => openAccountModal(t.dataset.acc));
+    t.addEventListener("keydown", (e) => { if (e.key === "Enter") openAccountModal(t.dataset.acc); });
+  });
+}
+
+function renderList(rows, ym) {
+  const grouped = groupedRows(rows, ym);
+  const body = $("gridBody");
+  let html = "", last = null;
+  for (const { aid, a, g } of grouped) {
+    if (g.k !== last) {
+      const inG = grouped.filter(r => r.g.k === g.k);
+      const savedC = inG.filter(r => statusOf(r.aid, ym) === "Y").length;
+      html += `<tr class="ghead"><td colspan="7">${esc(g.k)}<span class="gcount">${savedC}/${inG.length}</span></td></tr>`;
+      last = g.k;
     }
     const mark = markOf(aid, ym);
     const v = mark?.v || "";
@@ -727,6 +936,78 @@ function renderGrid() {
     b.addEventListener("click", () => setMark(b.dataset.aid, b.dataset.v)));
 }
 
+/* ------------- Account & day popups ------------- */
+function openAccountModal(aid) { state.ui.accModal = aid; state.ui.dayModal = null; buildAccountModal(aid, true); }
+function openDayModal(d)      { state.ui.dayModal = d;  state.ui.accModal = null; buildDayModal(d, true); }
+
+function buildAccountModal(aid, fresh) {
+  const a = state.accounts[aid];
+  if (!a) { closeModal(); return; }
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const mark = markOf(aid, ym);
+  const v = mark?.v || "";
+  const meta = v ? `Marked ${v} by ${esc((mark.by||"").split("@")[0])} · ${fmtWhen(mark.at)}` : "Not marked yet this month.";
+  const html = `
+    <h2>${esc(a.vendor)} ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</h2>
+    <div class="sub">${esc(MONTH_NAMES[state.ui.month-1])} ${state.ui.year}</div>
+    <dl class="acc-facts">
+      <dt>Store</dt><dd>${esc(a.store)}</dd>
+      <dt>Account #</dt><dd>${esc(a.accountNumber || "…" + a.last4)}</dd>
+      <dt>Est. receival</dt><dd>${esc(a.estReceival || "—")}</dd>
+      <dt>Est. invoice</dt><dd>${esc(a.estInvoice || "—")}</dd>
+      <dt>Est. due / draft</dt><dd>${esc(a.estDue || "—")}</dd>
+      ${a.notes ? `<dt>Notes</dt><dd>${esc(a.notes)}</dd>` : ""}
+    </dl>
+    <div class="big-stamp">
+      <button class="y ${v==="Y"?"on":""}" data-set="Y">Y — saved to server</button>
+      <button class="n ${v==="N"?"on":""}" data-set="N">N — not available</button>
+      <button data-set="">Clear</button>
+    </div>
+    <div class="acc-meta">${meta}</div>
+    <div class="actions"><button class="btn" data-close>Close</button></div>`;
+  if (fresh) openModal(html); else $("modalBox").innerHTML = html;
+  $("modalBox").querySelectorAll("[data-set]").forEach(b =>
+    b.addEventListener("click", () => { writeMark(aid, b.dataset.set); closeModal(); }));
+  $("modalBox").querySelector("[data-close]").addEventListener("click", closeModal);
+}
+
+function buildDayModal(d, fresh) {
+  const ym = ymKey(state.ui.year, state.ui.month);
+  const daysIn = new Date(state.ui.year, state.ui.month, 0).getDate();
+  const list = visibleRows(ym)
+    .map(([aid, a]) => [aid, a, parseRange(a.estReceival)])
+    .filter(([, , r]) => r && Math.min(r.d1, daysIn) === d)
+    .sort((x, y) => statusWeight(statusOf(x[0], ym)) - statusWeight(statusOf(y[0], ym))
+      || x[1].vendor.localeCompare(y[1].vendor));
+  const savedC = list.filter(([aid]) => statusOf(aid, ym) === "Y").length;
+  const rowsHtml = list.map(([aid, a, r]) => {
+    const v = statusOf(aid, ym);
+    return `<div class="dm-row">
+      <div class="who"><b>${esc(a.vendor)}</b> ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""} · ${esc(a.store)}
+        <div class="acct">${esc(a.accountNumber || "…" + a.last4)}</div></div>
+      <div class="est">est. ${rangeLabel(r)}</div>
+      <div class="stamp">
+        <button class="y ${v==="Y"?"on":""}" data-aid="${esc(aid)}" data-v="Y">Y</button>
+        <button class="n ${v==="N"?"on":""}" data-aid="${esc(aid)}" data-v="N">N</button>
+      </div></div>`;
+  }).join("") || `<div class="empty">Nothing expected on this day with the current filters.</div>`;
+  const html = `
+    <h2>${esc(MONTH_NAMES[state.ui.month-1])} ${d}, ${state.ui.year}</h2>
+    <div class="sub">${savedC}/${list.length} saved — buttons save instantly; the list stays open.</div>
+    <div style="max-height:56vh; overflow:auto">${rowsHtml}</div>
+    <div class="actions"><button class="btn" data-close>Close</button></div>`;
+  if (fresh) openModal(html, true); else $("modalBox").innerHTML = html;
+  $("modalBox").querySelectorAll(".stamp button").forEach(b =>
+    b.addEventListener("click", () => setMark(b.dataset.aid, b.dataset.v)));
+  $("modalBox").querySelector("[data-close]").addEventListener("click", closeModal);
+}
+
+function renderOpenPopups() {
+  if (!$("overlay").classList.contains("open")) return;
+  if (state.ui.dayModal != null) buildDayModal(state.ui.dayModal, false);
+  else if (state.ui.accModal != null) buildAccountModal(state.ui.accModal, false);
+}
+
 function renderSide() {
   const ym = ymKey(state.ui.year, state.ui.month);
   const per = {};
@@ -744,25 +1025,28 @@ function renderSide() {
 
 /* ---------------------------- Toolbar wiring ---------------------------- */
 function wireToolbar() {
-  $("q").addEventListener("input", (e) => { state.ui.q = e.target.value; renderSummary(); renderGrid(); });
+  $("q").addEventListener("input", (e) => { state.ui.q = e.target.value; renderSummary(); renderMain(); });
   $("fBook").addEventListener("change", (e) => { state.ui.fBook = e.target.value; renderAll(); });
   $("fStore").addEventListener("change", (e) => { state.ui.fStore = e.target.value; renderAll(); });
   $("fVendor").addEventListener("change", (e) => { state.ui.fVendor = e.target.value; renderAll(); });
-  $("gbVendor").addEventListener("click", () => setGroupBy("vendor"));
-  $("gbStore").addEventListener("click", () => setGroupBy("store"));
+  $("fStatus").addEventListener("change", (e) => { state.ui.fStatus = e.target.value; renderAll(); });
+  $("gSort").addEventListener("change", (e) => { state.ui.groupBy = e.target.value; renderMain(); });
+  $("vwCal").addEventListener("click", () => setView("calendar"));
+  $("vwTiles").addEventListener("click", () => setView("tiles"));
+  $("vwList").addEventListener("click", () => setView("list"));
   $("yearSel").addEventListener("change", (e) => { state.ui.year = +e.target.value; subscribeStatusYear(); renderAll(); });
   $("csvBtn").addEventListener("click", exportCsv);
   $("adminBtn").addEventListener("click", () => openAdmin("stores"));
   $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeModal(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 }
-function setGroupBy(g){ state.ui.groupBy = g; $("gbVendor").classList.toggle("on", g==="vendor"); $("gbStore").classList.toggle("on", g==="store"); renderGrid(); }
+function setView(v){ state.ui.view = v; renderMain(); }
 
 function exportCsv() {
   const ym = ymKey(state.ui.year, state.ui.month);
   const rows = [["Month","Log","Vendor","Store","Account#","Est Receival","Est Invoice","Est Due","Status","By","When"]];
   for (const [aid, a] of Object.entries(state.accounts)) {
-    if (!isActive(a, ym) || !passesFilters(a)) continue;
+    if (!isActive(a, ym) || !passesFilters(a, aid)) continue;
     const m = markOf(aid, ym);
     rows.push([ym, a.book, a.vendor, a.store, a.accountNumber, a.estReceival, a.estInvoice, a.estDue, m?.v || "", m?.by || "", fmtWhen(m?.at)]);
   }
@@ -783,7 +1067,7 @@ function toast(msg, isErr) {
   setTimeout(() => t.remove(), 4200);
 }
 function openModal(html, wide) { $("modalBox").className = "modal" + (wide ? " wide" : ""); $("modalBox").innerHTML = html; $("overlay").classList.add("open"); }
-function closeModal(){ $("overlay").classList.remove("open"); }
+function closeModal(){ $("overlay").classList.remove("open"); state.ui.dayModal = null; state.ui.accModal = null; }
 
 /* ======================================================================
    Manage drawer: Stores · Vendors · Accounts · FindMi sync · Data
