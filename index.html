@@ -668,15 +668,34 @@ function unsubscribeAll(){ state.unsub.forEach(u => u && u()); state.unsub = [];
 function isActive(acc, ym) { return acc.activeFrom <= ym && (!acc.activeTo || acc.activeTo >= ym); }
 function realYm() { const d = new Date(); return ymKey(d.getFullYear(), d.getMonth() + 1); }   // the actual current month, regardless of which month is being viewed
 function prevYmOf(ym) { const [y, m] = ym.split("-").map(Number); return ymKey(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1); }
-/** Display-only store name standardization: "BK Name #Number". Root data is never changed. */
+/** Pull the city and store number out of any spelling:
+    "Terrell#25198", "Burger King #13191 Marshall", "BK #25385 Athens" -> {city, num}. */
+function storeParts(name) {
+  let s = String(name || "").trim();
+  if (!s) return { city: "", num: "" };
+  s = s.replace(/^\s*(?:bk|burger\s*king)\b[\s:-]*/i, "").replace(/\bburger\s*king\b/ig, " ");
+  let num = "";
+  const m = s.match(/#\s*(\d+)/) || s.match(/(?:^|\s)(\d{3,6})(?=\s|$)/);
+  if (m) { num = m[1]; s = s.slice(0, m.index) + " " + s.slice(m.index + m[0].length); }
+  const city = s.replace(/#/g, " ").replace(/\s+/g, " ").trim().replace(/^[\s,-]+|[\s,-]+$/g, "");
+  return { city, num };
+}
+/** Display-only store name standardization: "BK City #Number". Root data is never changed. */
 function dspStore(name) {
   const raw = String(name || "").trim();
   if (!raw || /consolidated/i.test(raw)) return raw;
-  let s = raw.replace(/^bk\s*/i, "");
-  const m = s.match(/^(.*?)\s*#\s*(\d+)\s*$/);
-  if (m) s = `${m[1].trim()} #${m[2]}`;
-  return "BK " + s;
+  const { city, num } = storeParts(raw);
+  if (!city && !num) return raw;
+  return "BK " + (city || "Store") + (num ? " #" + num : "");
 }
+/** Alphabetize by city (so "Burger King #13917 Belton" sorts under B for Belton). */
+function storeSortKey(name) {
+  const raw = String(name || "");
+  if (/consolidated/i.test(raw)) return "zzz " + raw.toLowerCase();
+  const p = storeParts(raw);
+  return (p.city || raw).toLowerCase() + " " + p.num;
+}
+function cmpStore(a, b) { return storeSortKey(a).localeCompare(storeSortKey(b)); }
 function backdateOk(from) {
   if (from >= realYm()) return true;
   return confirm(`Heads up: ${from} is in the past.\n\nStarting tracking from ${from} makes past months EXPECT this — they'll show extra "missing" until marked. Nothing already saved is ever changed; only the expected counts grow.\n\nStart from ${from} anyway? (Cancel to go back and use ${realYm()}.)`);
@@ -763,7 +782,7 @@ function renderMonthRail() {
 function renderFilters() {
   const books = [...new Set(Object.values(state.accounts).map(a => a.book))].sort();
   fillSelect($("fBook"), books.map(b => [b, "Log: " + b]), state.ui.fBook, "All logs");
-  const stores = Object.entries(state.stores).sort((a,b) => a[1].name.localeCompare(b[1].name));
+  const stores = Object.entries(state.stores).filter(([,s]) => !s.mergedInto).sort((a,b) => cmpStore(a[1].name, b[1].name));
   fillSelect($("fStore"), stores.map(([id,s]) => [id, dspStore(s.name)]), state.ui.fStore, "All stores");
   const vendors = Object.entries(state.vendors).sort((a,b) => a[1].name.localeCompare(b[1].name));
   fillSelect($("fVendor"), vendors.map(([id,v]) => [id, v.name]), state.ui.fVendor, "All vendors");
@@ -835,7 +854,7 @@ function groupKeyOf(aid, a, ym) {
 function groupedRows(rows, ym) {
   return rows.map(([aid, a]) => ({ aid, a, g: groupKeyOf(aid, a, ym) }))
     .sort((x, y) => x.g.w - y.g.w || x.g.k.localeCompare(y.g.k)
-      || x.a.vendor.localeCompare(y.a.vendor) || x.a.store.localeCompare(y.a.store));
+      || x.a.vendor.localeCompare(y.a.vendor) || cmpStore(x.a.store, y.a.store));
 }
 
 function showEmptyState(rows) {
@@ -1093,7 +1112,7 @@ function renderSide() {
     per[a.storeId] ||= { name: dspStore(a.store), missing: 0 };
     if (markOf(aid, ym)?.v !== "Y") per[a.storeId].missing++;
   }
-  const rows = Object.entries(per).sort((x,y) => y[1].missing - x[1].missing || x[1].name.localeCompare(y[1].name));
+  const rows = Object.entries(per).sort((x,y) => y[1].missing - x[1].missing || cmpStore(x[1].name, y[1].name));
   $("sideBody").innerHTML = rows.map(([sid, s]) =>
     `<tr data-sid="${esc(sid)}"><td>${esc(s.name)}</td><td class="n ${s.missing===0?"zero":""}">${s.missing===0?"✓":s.missing}</td></tr>`).join("");
   $("sideBody").querySelectorAll("tr").forEach(tr =>
@@ -1164,10 +1183,12 @@ function openAdmin(tab) {
 
 /* ---- Stores tab ---- */
 function renderAdminStores() {
-  const list = Object.entries(state.stores).sort((a,b) => a[1].name.localeCompare(b[1].name));
+  const merged = Object.values(state.stores).filter(s => s.mergedInto).length;
+  const list = Object.entries(state.stores).filter(([,s]) => !s.mergedInto).sort((a,b) => cmpStore(a[1].name, b[1].name));
   $("adminBody").innerHTML = `
     <div class="row2" style="align-items:center">
       <button class="btn primary" id="addStoreBtn">Add store</button>
+      <button class="btn" id="dupBtn">Find duplicates…</button>
       <button class="btn" id="fmOpen">Compare with FindMi…</button>
     </div>
     <div id="fmSection" class="hidden">
@@ -1181,8 +1202,10 @@ function renderAdminStores() {
       const n = Object.values(state.accounts).filter(a => a.storeId === id && !a.activeTo).length;
       return `<tr><td>${esc(dspStore(s.name))}</td><td>${esc(s.entity || "")}</td><td>${n} active</td>
         <td class="act"><button data-edit="${esc(id)}">Edit</button></td></tr>`;
-    }).join("")}</tbody></table>`;
+    }).join("")}</tbody></table>
+    ${merged ? `<div class="sub">${merged} merged duplicate${merged>1?"s":""} hidden — their history lives on under the store they merged into.</div>` : ""}`;
   $("addStoreBtn").addEventListener("click", () => storeWizard());
+  $("dupBtn").addEventListener("click", mergeWizard);
   $("fmUrl").value = state.settings.findmiUrl || "";
   $("fmOpen").addEventListener("click", () => {
     $("fmSection").classList.toggle("hidden");
@@ -1195,7 +1218,7 @@ function renderAdminStores() {
 
 function storeWizard(editId) {
   const s = editId ? state.stores[editId] : { name: "", entity: "", active: true };
-  const storeOpts = Object.entries(state.stores).sort((a,b)=>a[1].name.localeCompare(b[1].name))
+  const storeOpts = Object.entries(state.stores).filter(([,s]) => !s.mergedInto).sort((a,b)=>cmpStore(a[1].name, b[1].name))
     .map(([id, st]) => `<option value="${esc(id)}">${esc(dspStore(st.name))}</option>`).join("");
   const ymNow = realYm();
   openModal(`
@@ -1274,6 +1297,95 @@ function storeWizard(editId) {
   });
 }
 
+/* ---- Duplicate stores: find + merge (history is preserved, nothing deleted) ---- */
+function findDupGroups() {
+  const groups = {};
+  for (const [sid, s] of Object.entries(state.stores)) {
+    if (s.mergedInto) continue;
+    const base = storeParts(s.name).city.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (!base) continue;
+    (groups[base] ||= []).push([sid, s]);
+  }
+  return Object.values(groups).filter(g => {
+    if (g.length < 2) return false;
+    // every member numbered with distinct numbers = different locations (Plano #13192 vs #4851), not duplicates
+    const nums = g.map(([, s]) => storeParts(s.name).num);
+    if (nums.every(Boolean) && new Set(nums).size === nums.length) return false;
+    return true;
+  }).sort((a, b) => cmpStore(a[0][1].name, b[0][1].name));
+}
+
+function mergeWizard() {
+  const groups = findDupGroups();
+  if (!groups.length) { toast("No same-name stores found — nothing looks duplicated."); return; }
+  const accCount = (sid) => Object.values(state.accounts).filter(a => a.storeId === sid).length;
+  const groupHtml = groups.map((g, gi) => {
+    // default keeper: FindMi-linked first, then the one with a store number, then most accounts
+    const scored = [...g].sort((x, y) =>
+      (!!y[1].findmiId - !!x[1].findmiId) ||
+      (!!storeParts(y[1].name).num - !!storeParts(x[1].name).num) ||
+      (accCount(y[0]) - accCount(x[0])));
+    const keep = scored[0][0];
+    return `<div class="fm-sec">
+      <h4><label style="text-transform:none; letter-spacing:0"><input type="checkbox" data-g="${gi}"> Merge this group</label></h4>
+      ${g.map(([sid, s]) => `<div class="fm-row">
+        <label class="grow"><input type="radio" name="keep${gi}" value="${esc(sid)}" ${sid === keep ? "checked" : ""}>
+          <b>${esc(dspStore(s.name))}</b> <span class="how">${accCount(sid)} accounts${s.findmiId ? " · linked to FindMi" : ""}${s.active === false ? " · retired" : ""}</span></label>
+        <span class="how">keep this one</span></div>`).join("")}
+    </div>`;
+  }).join("");
+  openModal(`
+    <h2>Possible duplicate stores</h2>
+    <div class="sub">Same place listed twice (e.g. "BK Terrell" and "BK Terrell #25198")? Tick the group, pick which name to keep, and merge. All accounts and every past month's marks move under the kept store — <b>nothing is deleted</b>. Careful: stores with <i>different</i> store numbers can be genuinely different locations (like the two Dentons) — only merge when you're sure it's one place.</div>
+    ${groupHtml}
+    <div class="actions">
+      <button class="btn" id="mwCancel">Cancel</button>
+      <button class="btn primary" id="mwGo">Merge ticked groups</button>
+    </div>`, true);
+  $("mwCancel").addEventListener("click", () => openAdmin("stores"));
+  $("mwGo").addEventListener("click", async () => {
+    const box = $("modalBox");
+    const jobs = [];
+    groups.forEach((g, gi) => {
+      const on = box.querySelector(`[data-g="${gi}"]`);
+      if (!on || !on.checked) return;
+      const keep = box.querySelector(`input[name="keep${gi}"]:checked`)?.value;
+      if (!keep) return;
+      jobs.push({ keep, others: g.map(([sid]) => sid).filter(sid => sid !== keep) });
+    });
+    if (!jobs.length) return toast("Tick at least one group to merge.");
+    const total = jobs.reduce((n, j) => n + j.others.length, 0);
+    if (!confirm(`Merge ${total} duplicate store${total > 1 ? "s" : ""} into ${jobs.length} kept store${jobs.length > 1 ? "s" : ""}?
+
+• Their accounts and ALL past marks move under the kept store
+• The duplicate entry is hidden (kept in the data, never deleted)
+• Expected counts don't change — nothing is added or removed`)) return;
+    try {
+      const writes = [];
+      for (const { keep, others } of jobs) {
+        const K = state.stores[keep];
+        for (const dup of others) {
+          const Ds = state.stores[dup];
+          for (const [aid, a] of Object.entries(state.accounts))
+            if (a.storeId === dup) writes.push(["accounts", aid, { storeId: keep, store: K.name }]);
+          writes.push(["stores", dup, { active: false, mergedInto: keep }]);
+          const upd = {};
+          if (!K.findmiId && Ds.findmiId) upd.findmiId = Ds.findmiId;
+          if (!K.entity && Ds.entity) upd.entity = Ds.entity;
+          if (Object.keys(upd).length) writes.push(["stores", keep, upd]);
+        }
+      }
+      for (let i = 0; i < writes.length; i += 400) {
+        const batch = fb.writeBatch(fb.db);
+        writes.slice(i, i + 400).forEach(([c, id, dta]) => batch.set(fb.doc(fb.db, c, id), dta, { merge: true }));
+        await batch.commit();
+      }
+      toast(`Merged ${total} duplicate${total > 1 ? "s" : ""} — all history moved under the kept store${jobs.length > 1 ? "s" : ""}.`);
+      openAdmin("stores");
+    } catch (e) { toast("Merge failed — " + explainError(e), true); DIAG.err("merge", e.code || e.message); console.error(e); }
+  });
+}
+
 /* ---- Vendors tab ---- */
 function renderAdminVendors() {
   const list = Object.entries(state.vendors).sort((a,b) => a[1].name.localeCompare(b[1].name));
@@ -1298,7 +1410,7 @@ function consolidateWizard(vendorId) {
   const start = realYm();
   const perStore = Object.entries(state.accounts)
     .filter(([, a]) => a.vendorId === vendorId && !a.activeTo && !a.consolidated)
-    .sort((x, y) => x[1].store.localeCompare(y[1].store));
+    .sort((x, y) => cmpStore(x[1].store, y[1].store));
   if (!perStore.length) { toast("This vendor has no active per-store accounts to consolidate."); return; }
   const est = perStore[0][1];
   openModal(`
@@ -1356,8 +1468,8 @@ function vendorWizard(vendorId) {
   // when extending an existing vendor, only offer stores it doesn't already bill
   const covered = new Set(vendorId ? Object.values(state.accounts).filter(a => a.vendorId === vendorId && !a.activeTo).map(a => a.storeId) : []);
   const stores = Object.entries(state.stores)
-    .filter(([sid, s]) => s.active !== false && !covered.has(sid))
-    .sort((a,b) => a[1].name.localeCompare(b[1].name));
+    .filter(([sid, s]) => s.active !== false && !s.mergedInto && !covered.has(sid))
+    .sort((a,b) => cmpStore(a[1].name, b[1].name));
   openModal(`
     <h2>${v ? "Add “" + esc(v.name) + "” to more stores" : "Add vendor"}</h2>
     <div class="sub">One screen: ${v ? "" : "name the vendor, "}tick the stores it bills, done. An account is created per store — fill in the account numbers whenever they arrive.</div>
@@ -1448,7 +1560,7 @@ function accountForm(editId) {
   };
   const vOpts = Object.entries(state.vendors).sort((x,y)=>x[1].name.localeCompare(y[1].name))
     .map(([id,v]) => `<option value="${esc(id)}" ${id===a.vendorId?"selected":""}>${esc(v.name)}</option>`).join("");
-  const sOpts = Object.entries(state.stores).sort((x,y)=>x[1].name.localeCompare(y[1].name))
+  const sOpts = Object.entries(state.stores).filter(([,s]) => !s.mergedInto).sort((x,y)=>cmpStore(x[1].name, y[1].name))
     .map(([id,s]) => `<option value="${esc(id)}" ${id===a.storeId?"selected":""}>${esc(dspStore(s.name))}</option>`).join("");
   const books = [...new Set(["BK","DPR", ...Object.values(state.accounts).map(x => x.book)])];
   openModal(`
@@ -1501,7 +1613,7 @@ function accountForm(editId) {
 }
 
 /* ---- FindMi: fetch, smart matching, diff, sync tab ---- */
-function fmNorm(s)  { return String(s||"").toLowerCase().replace(/^bk\s*/,"").replace(/[^a-z0-9]+/g,""); }
+function fmNorm(s)  { return String(s||"").toLowerCase().replace(/burger\s*king/g,"").replace(/^bk\s*/,"").replace(/[^a-z0-9]+/g,""); }
 function fmDigits(s){ return new Set(String(s||"").match(/\d{3,}/g) || []); }
 function fmBase(s)  { return fmNorm(s).replace(/\d+/g,""); }
 
@@ -1546,7 +1658,7 @@ function diffFindmi(fmList) {
   const taken = new Set();
   const matched = [], news = [];
   for (const fm of fmList) {
-    const m = matchFindmiStore(fm, Object.entries(state.stores).filter(([sid]) => !taken.has(sid)));
+    const m = matchFindmiStore(fm, Object.entries(state.stores).filter(([sid, s]) => !taken.has(sid) && !s.mergedInto));
     if (m) {
       taken.add(m.sid);
       const s = state.stores[m.sid];
@@ -1556,7 +1668,8 @@ function diffFindmi(fmList) {
         retiredHere: s.active === false });
     } else news.push(fm);
   }
-  const gone = Object.entries(state.stores).filter(([sid, s]) => !taken.has(sid) && s.active !== false);
+  const gone = Object.entries(state.stores).filter(([sid, s]) => !taken.has(sid) && s.active !== false && !s.mergedInto)
+    .sort((a, b) => cmpStore(a[1].name, b[1].name));
   return { matched, news, gone };
 }
 
@@ -1593,8 +1706,8 @@ async function runFindmiCompare() {
   const ymNow = realYm();
   const [ry, rm] = ymNow.split("-").map(Number);
   const nextYm = ymKey(rm === 12 ? ry + 1 : ry, rm === 12 ? 1 : rm + 1);
-  const storeOpts = Object.entries(state.stores).filter(([,s]) => s.active !== false)
-    .sort((a,b) => a[1].name.localeCompare(b[1].name))
+  const storeOpts = Object.entries(state.stores).filter(([,s]) => s.active !== false && !s.mergedInto)
+    .sort((a,b) => cmpStore(a[1].name, b[1].name))
     .map(([id, st]) => `<option value="${esc(id)}">${esc(dspStore(st.name))}</option>`).join("");
 
   const matchedRows = d.matched.map(m => {
