@@ -664,6 +664,11 @@ function unsubscribeAll(){ state.unsub.forEach(u => u && u()); state.unsub = [];
 
 /* ---------------------------- Core logic ---------------------------- */
 function isActive(acc, ym) { return acc.activeFrom <= ym && (!acc.activeTo || acc.activeTo >= ym); }
+function realYm() { const d = new Date(); return ymKey(d.getFullYear(), d.getMonth() + 1); }   // the actual current month, regardless of which month is being viewed
+function backdateOk(from) {
+  if (from >= realYm()) return true;
+  return confirm(`Heads up: ${from} is in the past.\n\nStarting tracking from ${from} makes past months EXPECT this — they'll show extra "missing" until marked. Nothing already saved is ever changed; only the expected counts grow.\n\nStart from ${from} anyway? (Cancel to go back and use ${realYm()}.)`);
+}
 function markOf(aid, ym) { return state.statusByYm[ym]?.entries?.[aid] || null; }
 
 function monthStats(ym, filterFn) {
@@ -1124,7 +1129,7 @@ function storeWizard(editId) {
   const s = editId ? state.stores[editId] : { name: "", entity: "", active: true };
   const storeOpts = Object.entries(state.stores).sort((a,b)=>a[1].name.localeCompare(b[1].name))
     .map(([id, st]) => `<option value="${esc(id)}">${esc(st.name)}</option>`).join("");
-  const ymNow = ymKey(state.ui.year, state.ui.month);
+  const ymNow = realYm();
   openModal(`
     <h2>${editId ? "Edit store" : "Add store"}</h2>
     <div class="sub">${editId ? "" : "This is the only place a new store is added. Clone its vendor list from a similar store, then fill in account numbers as they arrive."}</div>
@@ -1137,7 +1142,8 @@ function storeWizard(editId) {
       <select id="stTemplate"><option value="">Start empty — add accounts by hand</option>${storeOpts}</select>
       <div id="tplList"></div>
       <label>Tracking starts</label>
-      <input type="text" id="stFrom" value="${ymNow}" placeholder="YYYY-MM">`}
+      <input type="text" id="stFrom" value="${ymNow}" placeholder="YYYY-MM">
+      <div class="note" style="margin-top:8px">Forward-only: this store counts from the start month onward. Past months and everything already marked stay exactly as they are.</div>`}
     <div class="actions">
       ${editId ? `<button class="btn danger" id="stRetire">Retire store &amp; end its accounts…</button>` : ""}
       <button class="btn" id="stCancel">Cancel</button>
@@ -1162,6 +1168,7 @@ function storeWizard(editId) {
       await fb.setDoc(fb.doc(fb.db, "stores", sid), { name, entity: $("stEntity").value.trim(), active: true }, { merge: true });
       if (!editId) {
         const from = ($("stFrom").value.trim().match(/^\d{4}-\d{2}$/) || [ymNow])[0];
+        if (!backdateOk(from)) return;
         const picked = [...$("modalBox").querySelectorAll("#tplList input:checked")].map(i => i.value);
         const batch = fb.writeBatch(fb.db);
         for (const srcId of picked) {
@@ -1203,16 +1210,81 @@ function storeWizard(editId) {
 function renderAdminVendors() {
   const list = Object.entries(state.vendors).sort((a,b) => a[1].name.localeCompare(b[1].name));
   $("adminBody").innerHTML = `
-    <div class="row2"><input type="text" id="newVendor" placeholder="New vendor name"><button class="btn primary" id="addVendorBtn">Add vendor</button></div>
-    <table class="mini-table"><tbody>${list.map(([id,v]) => {
-      const n = Object.values(state.accounts).filter(a => a.vendorId === id).length;
-      return `<tr><td>${esc(v.name)}</td><td>${n} accounts</td></tr>`;
+    <div class="note">Adding a vendor is <b>forward-only</b>: pick the stores it bills, and it starts counting from this month. Past months never change.</div>
+    <button class="btn primary" id="addVendorBtn">Add vendor…</button>
+    <table class="mini-table"><thead><tr><th>Vendor</th><th>Active accounts</th><th></th></tr></thead>
+    <tbody>${list.map(([id,v]) => {
+      const n = Object.values(state.accounts).filter(a => a.vendorId === id && !a.activeTo).length;
+      return `<tr><td>${esc(v.name)}</td><td>${n}</td>
+        <td class="act"><button data-ext="${esc(id)}">Add to stores…</button></td></tr>`;
     }).join("")}</tbody></table>`;
-  $("addVendorBtn").addEventListener("click", async () => {
-    const name = $("newVendor").value.trim();
-    if (!name) return;
-    await fb.setDoc(fb.doc(fb.db, "vendors", slug(name)), { name });
-    toast("Vendor added."); openAdmin("vendors");
+  $("addVendorBtn").addEventListener("click", () => vendorWizard(null));
+  $("adminBody").querySelectorAll("[data-ext]").forEach(b => b.addEventListener("click", () => vendorWizard(b.dataset.ext)));
+}
+
+/** One screen: vendor name + which stores + est. dates → an account per store, starting this month. */
+function vendorWizard(vendorId) {
+  const v = vendorId ? state.vendors[vendorId] : null;
+  const ymNow = realYm();
+  // when extending an existing vendor, only offer stores it doesn't already bill
+  const covered = new Set(vendorId ? Object.values(state.accounts).filter(a => a.vendorId === vendorId && !a.activeTo).map(a => a.storeId) : []);
+  const stores = Object.entries(state.stores)
+    .filter(([sid, s]) => s.active !== false && !covered.has(sid))
+    .sort((a,b) => a[1].name.localeCompare(b[1].name));
+  openModal(`
+    <h2>${v ? "Add “" + esc(v.name) + "” to more stores" : "Add vendor"}</h2>
+    <div class="sub">One screen: ${v ? "" : "name the vendor, "}tick the stores it bills, done. An account is created per store — fill in the account numbers whenever they arrive.</div>
+    ${v ? "" : `<label>Vendor name</label><input type="text" id="vwName" placeholder="e.g. Frontier">`}
+    <div class="row3">
+      <div><label>Est. receival (day)</label><input type="text" id="vwRcv" placeholder="e.g. 22-23"></div>
+      <div><label>Est. invoice date</label><input type="text" id="vwInv" placeholder="optional"></div>
+      <div><label>Est. due / draft</label><input type="text" id="vwDue" placeholder="optional"></div>
+    </div>
+    <div class="row2">
+      <div><label>Log</label><select id="vwBook">
+        <option value="auto">Auto — match each store (DPR stores → DPR, rest → BK)</option>
+        <option value="BK">BK for all</option><option value="DPR">DPR for all</option></select></div>
+      <div><label>Tracking starts</label><input type="text" id="vwFrom" value="${ymNow}"></div>
+    </div>
+    <label>Stores it bills <span class="acct">(<a href="#" id="vwAll">all</a> · <a href="#" id="vwNone">none</a>)</span></label>
+    ${stores.length ? `<div class="checklist">${stores.map(([sid, s]) =>
+      `<label><input type="checkbox" value="${esc(sid)}"> ${esc(s.name)}${s.entity ? ` <span class="acct">(${esc(s.entity)})</span>` : ""}</label>`).join("")}</div>`
+      : `<div class="note">Every active store already has this vendor.</div>`}
+    <div class="note" style="margin-top:8px">Forward-only: nothing before ${ymNow} changes — past months keep their counts and marks exactly as they are.</div>
+    <div class="actions">
+      <button class="btn" id="vwCancel">Cancel</button>
+      <button class="btn primary" id="vwSave">${v ? "Add to selected stores" : "Add vendor"}</button>
+    </div>`);
+  $("vwCancel").addEventListener("click", () => openAdmin("vendors"));
+  $("vwAll").addEventListener("click", (e) => { e.preventDefault(); $("modalBox").querySelectorAll(".checklist input").forEach(i => i.checked = true); });
+  $("vwNone").addEventListener("click", (e) => { e.preventDefault(); $("modalBox").querySelectorAll(".checklist input").forEach(i => i.checked = false); });
+  $("vwSave").addEventListener("click", async () => {
+    const name = v ? v.name : $("vwName").value.trim();
+    if (!name) return toast("Give the vendor a name.", true);
+    const from = ($("vwFrom").value.trim().match(/^\d{4}-\d{2}$/) || [ymNow])[0];
+    if (!backdateOk(from)) return;
+    const picked = [...$("modalBox").querySelectorAll(".checklist input:checked")].map(i => i.value);
+    if (!v && !picked.length && !confirm("No stores ticked — add the vendor with no accounts yet?")) return;
+    const vid = vendorId || slug(name);
+    const bookSel = $("vwBook").value;
+    const est = { estReceival: $("vwRcv").value.trim(), estInvoice: $("vwInv").value.trim(), estDue: $("vwDue").value.trim() };
+    try {
+      const batch = fb.writeBatch(fb.db);
+      batch.set(fb.doc(fb.db, "vendors", vid), { name }, { merge: true });
+      for (const sid of picked) {
+        const st = state.stores[sid];
+        const book = bookSel === "auto" ? ((st.entity || "").toUpperCase().includes("DPR") ? "DPR" : "BK") : bookSel;
+        const aid = `${book.toLowerCase()}--${vid}--${sid}--new-${Math.random().toString(36).slice(2,6)}`;
+        batch.set(fb.doc(fb.db, "accounts", aid), {
+          vendorId: vid, vendor: name, storeId: sid, store: st.name,
+          accountNumber: "", last4: "", book, billType: "ACH", ...est,
+          activeFrom: from, activeTo: null, notes: "New vendor — fill in account #",
+        });
+      }
+      await batch.commit();
+      toast(picked.length ? `${name} added to ${picked.length} store${picked.length>1?"s":""}, counting from ${from}.` : `Vendor ${name} added.`);
+      openAdmin("vendors");
+    } catch (e) { toast("Save failed — " + explainError(e), true); DIAG.err("vendor-wizard", e.code||e.message); console.error(e); }
   });
 }
 
@@ -1245,7 +1317,7 @@ function renderAdminAccounts() {
 function accountForm(editId) {
   const a = editId ? state.accounts[editId] : {
     vendorId:"", storeId:"", accountNumber:"", book:"BK", billType:"ACH",
-    estReceival:"", estInvoice:"", estDue:"", activeFrom: ymKey(state.ui.year, state.ui.month), activeTo:null, notes:"",
+    estReceival:"", estInvoice:"", estDue:"", activeFrom: realYm(), activeTo:null, notes:"",
   };
   const vOpts = Object.entries(state.vendors).sort((x,y)=>x[1].name.localeCompare(y[1].name))
     .map(([id,v]) => `<option value="${esc(id)}" ${id===a.vendorId?"selected":""}>${esc(v.name)}</option>`).join("");
@@ -1272,6 +1344,7 @@ function accountForm(editId) {
       <div><label>Tracked until (blank = ongoing)</label><input type="text" id="afTo" value="${esc(a.activeTo || "")}"></div>
     </div>
     <label>Notes</label><input type="text" id="afNotes" value="${esc(a.notes || "")}">
+    <div class="note" style="margin-top:8px">Forward-only: this account is expected from "Tracked from" onward. Past months and saved marks never change.</div>
     <div class="actions">
       <button class="btn" id="afCancel">Cancel</button>
       <button class="btn primary" id="afSave">${editId ? "Save changes" : "Add account"}</button>
@@ -1282,6 +1355,7 @@ function accountForm(editId) {
     if (!vId || !sId) return toast("Pick a vendor and a store.", true);
     const from = $("afFrom").value.trim(), to = $("afTo").value.trim();
     if (!/^\d{4}-\d{2}$/.test(from) || (to && !/^\d{4}-\d{2}$/.test(to))) return toast("Dates need the YYYY-MM format.", true);
+    if ((!editId || from !== state.accounts[editId]?.activeFrom) && !backdateOk(from)) return;
     const acct = $("afAcct").value.trim();
     const digits = acct.replace(/\D/g,"");
     const book = $("afBook").value.trim() || "BK";
@@ -1402,8 +1476,9 @@ async function runFindmiCompare() {
     $("fmResults").innerHTML = `<div class="note warn">Couldn't reach FindMi (${esc(e.message)}). If this keeps happening the API may not allow requests from this site — see the CORS note in the README.</div>`;
     return;
   }
-  const ymNow = ymKey(state.ui.year, state.ui.month);
-  const nextYm = ymKey(state.ui.month === 12 ? state.ui.year + 1 : state.ui.year, state.ui.month === 12 ? 1 : state.ui.month + 1);
+  const ymNow = realYm();
+  const [ry, rm] = ymNow.split("-").map(Number);
+  const nextYm = ymKey(rm === 12 ? ry + 1 : ry, rm === 12 ? 1 : rm + 1);
   const storeOpts = Object.entries(state.stores).filter(([,s]) => s.active !== false)
     .sort((a,b) => a[1].name.localeCompare(b[1].name))
     .map(([id, st]) => `<option value="${esc(id)}">${esc(st.name)}</option>`).join("");
@@ -1477,6 +1552,27 @@ async function runFindmiCompare() {
       retired++;
     }
     if (!writes.length) return toast("Nothing selected — no changes made.");
+    // ---- pre-flight: show exactly what will happen before anything is written ----
+    const linked = d.matched.filter(m => m.needsLink).length;
+    const lines = [];
+    if (addedStores) lines.push(`Add <b>${addedStores}</b> store${addedStores>1?"s":""}${addedAccounts ? ` with <b>${addedAccounts}</b> cloned vendor accounts` : ""} — counted from <b>${ymNow}</b> onward only.`);
+    if (linked) lines.push(`Link <b>${linked}</b> matched store${linked>1?"s":""} to FindMi (metadata only — no counts change).`);
+    if (retired) lines.push(`<b>${retired}</b> store${retired>1?"s stop":" stops"} being expected after <b>${ymNow}</b> — every month up to and including ${ymNow} keeps its counts and marks.`);
+    lines.push(`Months before ${ymNow}: <b>completely untouched</b>. Nothing is deleted, ever.`);
+    const ok = await new Promise((res) => {
+      const host = document.createElement("div");
+      host.className = "note";
+      host.style.marginTop = "10px";
+      host.innerHTML = `<b>Please confirm:</b><ul style="margin:6px 0 10px 18px; padding:0">${lines.map(l => `<li>${l}</li>`).join("")}</ul>
+        <div class="actions" style="justify-content:flex-start; margin:0">
+          <button class="btn" id="pfNo">Cancel</button>
+          <button class="btn primary" id="pfYes">Yes — apply</button>
+        </div>`;
+      $("fmApply").closest(".actions").replaceWith(host);
+      host.querySelector("#pfNo").addEventListener("click", () => { res(false); runFindmiCompare(); });
+      host.querySelector("#pfYes").addEventListener("click", () => res(true));
+    });
+    if (!ok) return;
     try {
       for (let i = 0; i < writes.length; i += 400) {
         const batch = fb.writeBatch(fb.db);
