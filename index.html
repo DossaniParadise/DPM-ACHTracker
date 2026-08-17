@@ -203,6 +203,22 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 .gate code{background:var(--paper); border-radius:6px; padding:2px 6px; font-size:.78rem}
 .gate ol{padding-left:18px; font-size:.82rem; color:var(--ink)}
 .hidden{display:none!important}
+/* Diagnostics panel */
+.diag{position:fixed; right:14px; bottom:14px; width:min(580px, calc(100vw - 28px)); max-height:72vh; background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:0 18px 50px rgba(20,16,74,.28); z-index:120; display:flex; flex-direction:column; font-size:.82rem}
+.diag-head{display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--line)}
+.diag-head strong{font-size:.85rem}
+.diag-head .spacer{flex:1}
+.diag-head .tb-btn{border:1px solid var(--line); background:var(--paper); color:var(--ink)}
+.diag-body{padding:10px 12px; overflow:auto}
+.diag-steps{width:100%; border-collapse:collapse}
+.diag-steps td{padding:6px; border-bottom:1px solid var(--line); vertical-align:top}
+.diag-steps td.st{font-weight:700; white-space:nowrap; width:70px}
+.st-ok{color:var(--saved)} .st-fail{color:var(--red)} .st-warn{color:var(--flag)} .st-wait{color:var(--muted)}
+.diag-steps .why{color:var(--muted); font-size:.76rem; margin-top:2px}
+.diag h4{margin:12px 0 6px; font-size:.7rem; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
+.diag-errors{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.7rem; white-space:pre-wrap; color:#3f3f46; background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:8px; max-height:170px; overflow:auto}
+.diag-link{display:inline-block; margin-top:12px; font-size:.75rem; color:var(--muted); text-decoration:underline; cursor:pointer; background:none; border:0; padding:0}
+.conn{cursor:pointer}
 .empty{padding:34px; text-align:center; color:var(--muted); font-size:.85rem}
 </style>
 </head>
@@ -219,6 +235,7 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
       <li>Commit and redeploy. Full steps are in the README.</li>
     </ol>
     <p class="lead" style="margin-top:14px">The web config is safe to publish — access to the data itself is controlled by Firebase sign-in and security rules, not by hiding the config.</p>
+    <button class="diag-link" data-diag>Open diagnostics</button>
   </div>
 </div>
 
@@ -236,6 +253,7 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
       <div class="err-msg" id="loginErr"></div>
     </form>
     <p class="lead" style="margin-top:12px">No account yet? An admin can add you in the Firebase console under Authentication → Users.</p>
+    <button class="diag-link" data-diag>Sign-in not working? Open diagnostics</button>
   </div>
 </div>
 
@@ -245,7 +263,7 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
     <span class="wordmark">DP<span class="m">M</span><small>AP Invoice Log</small></span>
     <select id="yearSel" class="year-sel" aria-label="Year"></select>
     <div class="spacer"></div>
-    <div id="conn" class="conn"><div class="dot"></div><span id="connText">Connecting…</span></div>
+    <div id="conn" class="conn" data-diag title="Connection status — click for diagnostics"><div class="dot"></div><span id="connText">Connecting…</span></div>
     <span class="who" id="whoAmI"></span>
     <button class="tb-btn" id="adminBtn">Manage</button>
     <button class="tb-btn" id="signOutBtn">Sign out</button>
@@ -295,8 +313,45 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 <div class="overlay" id="overlay"><div class="modal" id="modalBox"></div></div>
 <div class="toast-host" id="toastHost"></div>
 
+<!-- Diagnostics panel (open via the links on the sign-in/setup screens, the status dot in the header, or by adding ?debug=1 to the URL) -->
+<div id="diagPanel" class="diag hidden" role="dialog" aria-label="Diagnostics">
+  <div class="diag-head">
+    <strong>Diagnostics</strong><span class="spacer"></span>
+    <button class="tb-btn" id="diagRerun">Re-run checks</button>
+    <button class="tb-btn" id="diagCopy">Copy report</button>
+    <button class="tb-btn" id="diagClose">Close</button>
+  </div>
+  <div class="diag-body">
+    <table class="diag-steps"><tbody id="diagSteps"></tbody></table>
+    <h4>Recent errors (newest last)</h4>
+    <div id="diagErrors" class="diag-errors">None recorded.</div>
+  </div>
+</div>
+
+<!-- Diagnostics core: loads before everything else so it can record any failure,
+     including the app script itself failing to start. -->
+<script>
+window.DIAG = {
+  steps: {}, order: [], errors: [],
+  step(id, label, status, detail) {
+    if (!this.steps[id]) this.order.push(id);
+    this.steps[id] = { label, status, detail: detail || "" };
+    if (window.renderDiag) window.renderDiag();
+  },
+  err(src, msg) {
+    this.errors.push(new Date().toLocaleTimeString() + "  [" + src + "]  " + String(msg).slice(0, 500));
+    if (this.errors.length > 60) this.errors.shift();
+    if (window.renderDiag) window.renderDiag();
+  },
+};
+window.addEventListener("error", (e) =>
+  DIAG.err("page", (e.message || "Script error") + (e.filename ? "  @ " + e.filename.split("/").pop() + ":" + e.lineno : "")));
+window.addEventListener("unhandledrejection", (e) =>
+  DIAG.err("promise", (e.reason && (e.reason.message || e.reason.code)) || e.reason || "Unhandled rejection"));
+</script>
+
 <!-- Firebase web config (not a secret — see README). If this file is absent, the setup screen shows. -->
-<script src="firebase-config.js" onerror="void 0"></script>
+<script src="firebase-config.js" onerror="DIAG.err('config','firebase-config.js did not load (missing from the repo, misnamed, or blocked)')"></script>
 
 <script type="module">
 /* ======================================================================
@@ -320,8 +375,99 @@ const state = {
 
 let fb = null; // { auth, db, fns... } filled after dynamic import
 
+/* ---------------------------- Diagnostics ---------------------------- */
+/** Translate a Firebase error into plain English + which README step fixes it. */
+function explainError(e) {
+  const code = (e && (e.code || e.message)) || String(e);
+  const map = {
+    "auth/invalid-credential":   "Email or password doesn't match. An admin can reset it in Firebase → Authentication → Users.",
+    "auth/user-not-found":       "No account with that email. An admin must add it first (README step A2).",
+    "auth/wrong-password":       "Password doesn't match. An admin can reset it in Firebase → Authentication → Users.",
+    "auth/invalid-email":        "That doesn't look like a valid email address — check for typos or spaces.",
+    "auth/missing-password":     "Enter your password.",
+    "auth/user-disabled":        "This account was disabled in the Firebase console.",
+    "auth/too-many-requests":    "Too many attempts — wait a few minutes, or reset the password (Firebase → Authentication → Users).",
+    "auth/network-request-failed": "Couldn't reach Firebase — check your internet connection (or a firewall/VPN blocking googleapis.com).",
+    "auth/unauthorized-domain":  "This site's address isn't authorized in Firebase. Fix: README step B4 — Authentication → Settings → Authorized domains → add " + location.hostname + ".",
+    "auth/operation-not-allowed":"Email/Password sign-in isn't enabled. Fix: README step A2 — Authentication → Sign-in method → enable Email/Password.",
+    "auth/invalid-api-key":      "The apiKey in firebase-config.js is wrong — re-copy it from Project settings → Your apps (README step A5).",
+    "permission-denied":         "Firestore blocked this. Usually the security rules weren't published (README step A4) — or you're signed out.",
+    "unauthenticated":           "You're signed out — sign in again.",
+    "unavailable":               "Firestore is unreachable right now — check your connection and try again.",
+    "failed-precondition":       "Firestore rejected this — most often the database hasn't been created yet (README step A3).",
+    "not-found":                 "The database or document doesn't exist yet — create the database (README step A3) or run the seed import (Part C).",
+    "resource-exhausted":        "Firebase's free daily quota was hit — it resets at midnight Pacific. (Very unusual for this app — tell your admin.)",
+  };
+  for (const k in map) if (code.includes(k)) return map[k];
+  return "Unexpected error: " + code;
+}
+
+function renderDiag() {
+  const rows = DIAG.order.map(id => {
+    const s = DIAG.steps[id];
+    const cls = { ok:"st-ok", fail:"st-fail", warn:"st-warn" }[s.status] || "st-wait";
+    const icon = { ok:"✓", fail:"✕", warn:"!" }[s.status] || "…";
+    return `<tr><td class="st ${cls}">${icon} ${s.status || "wait"}</td>
+      <td><div>${esc(s.label)}</div>${s.detail ? `<div class="why">${esc(s.detail)}</div>` : ""}</td></tr>`;
+  }).join("");
+  $("diagSteps").innerHTML = rows || `<tr><td class="st st-wait">…</td><td>Starting checks…</td></tr>`;
+  $("diagErrors").textContent = DIAG.errors.length ? DIAG.errors.join("\n") : "None recorded.";
+}
+window.renderDiag = renderDiag;
+
+function openDiag(){ $("diagPanel").classList.remove("hidden"); renderDiag(); }
+
+function diagReport() {
+  const counts = { stores:Object.keys(state.stores).length, vendors:Object.keys(state.vendors).length,
+                   accounts:Object.keys(state.accounts).length, statusDocs:Object.keys(state.statusByYm).length };
+  return JSON.stringify({
+    when: new Date().toISOString(), url: location.href, browser: navigator.userAgent,
+    projectId: window.FIREBASE_CONFIG?.projectId || null, authDomain: window.FIREBASE_CONFIG?.authDomain || null,
+    signedInAs: state.user?.email || null, loadedCounts: counts,
+    checks: DIAG.order.map(id => ({ id, ...DIAG.steps[id] })), errors: DIAG.errors,
+  }, null, 2);
+}
+
+/** Live checks that can be re-run: config shape, Firestore reachability, data counts. */
+async function runChecks() {
+  const cfg = window.FIREBASE_CONFIG;
+  if (!cfg) {
+    DIAG.step("cfg", "Config file (firebase-config.js)", "fail",
+      "Not loaded. It must sit next to index.html in the repo, named exactly firebase-config.js (watch out for a hidden .txt ending).");
+  } else {
+    const missing = ["apiKey","authDomain","projectId","appId"].filter(k => !cfg[k] || String(cfg[k]).includes("PASTE"));
+    if (missing.length) DIAG.step("cfg", "Config file (firebase-config.js)", "fail", "Loaded, but these values are missing or still placeholders: " + missing.join(", ") + " (README step A5).");
+    else if (!String(cfg.apiKey).startsWith("AIza")) DIAG.step("cfg", "Config file (firebase-config.js)", "warn", "Loaded, but the apiKey doesn't look like a Firebase web key — re-copy it from Project settings.");
+    else DIAG.step("cfg", "Config file (firebase-config.js)", "ok", "Project: " + cfg.projectId);
+  }
+  DIAG.step("host", "This page's address", "ok", location.hostname + (location.protocol === "file:" ? "  (opened as a local file — sign-in requires the hosted URL or localhost)" : ""));
+  if (!fb) { DIAG.step("fs", "Database reachable", "wait", "Waiting for Firebase to load."); return; }
+  if (!state.user) { DIAG.step("fs", "Database reachable", "wait", "Sign in to test database access."); return; }
+  try {
+    await fb.getDoc(fb.doc(fb.db, "settings", "app"));
+    DIAG.step("fs", "Database reachable", "ok", "Read test passed — rules allow this signed-in account.");
+  } catch (e) {
+    DIAG.step("fs", "Database reachable", "fail", explainError(e));
+    DIAG.err("firestore-test", e.code || e.message);
+  }
+  const n = Object.keys(state.accounts).length;
+  DIAG.step("data", "Data loaded", n ? "ok" : "warn",
+    n ? `${Object.keys(state.stores).length} stores · ${Object.keys(state.vendors).length} vendors · ${n} accounts · ${Object.keys(state.statusByYm).length} month docs (this year)`
+      : "Connected, but no accounts found — run the seed import: Manage → Data → Import (README Part C).");
+}
+
 /* ---------------------------- Boot ---------------------------- */
 (async function boot() {
+  document.querySelectorAll("[data-diag]").forEach(b => b.addEventListener("click", openDiag));
+  $("diagClose").addEventListener("click", () => $("diagPanel").classList.add("hidden"));
+  $("diagRerun").addEventListener("click", () => { toast("Re-running checks…"); runChecks(); });
+  $("diagCopy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(diagReport()); toast("Report copied — paste it wherever you're getting help."); }
+    catch { openModal(`<h2>Diagnostics report</h2><p class="p-note">Copy the text below manually:</p><textarea style="width:100%;height:260px;font-family:monospace;font-size:.7rem">${esc(diagReport())}</textarea><div class="m-actions"><button class="btn" onclick="document.querySelector('.overlay').classList.remove('open')">Close</button></div>`); }
+  });
+  if (new URLSearchParams(location.search).has("debug")) openDiag();
+
+  await runChecks();
   if (!window.FIREBASE_CONFIG || !window.FIREBASE_CONFIG.apiKey) {
     $("setupScreen").classList.remove("hidden");
     return;
@@ -340,9 +486,13 @@ let fb = null; // { auth, db, fns... } filled after dynamic import
       col: fsMod.collection, doc: fsMod.doc, onSnapshot: fsMod.onSnapshot,
       setDoc: fsMod.setDoc, updateDoc: fsMod.updateDoc, deleteDoc: fsMod.deleteDoc,
       query: fsMod.query, where: fsMod.where, writeBatch: fsMod.writeBatch,
-      serverTimestamp: fsMod.serverTimestamp, getDocs: fsMod.getDocs,
+      serverTimestamp: fsMod.serverTimestamp, getDocs: fsMod.getDocs, getDoc: fsMod.getDoc,
     };
+    DIAG.step("sdk", "Firebase software loaded (from Google's CDN)", "ok");
   } catch (e) {
+    DIAG.step("sdk", "Firebase software loaded (from Google's CDN)", "fail",
+      "Couldn't download Firebase — no internet, or a firewall/ad-blocker is blocking gstatic.com.");
+    DIAG.err("sdk", e.message || e);
     $("setupScreen").classList.remove("hidden");
     $("setupScreen").querySelector("p.lead").textContent =
       "Couldn't load Firebase from the CDN — check your internet connection and reload.";
@@ -350,10 +500,16 @@ let fb = null; // { auth, db, fns... } filled after dynamic import
     return;
   }
 
+  DIAG.step("auth", "Sign-in", "wait", "Waiting for sign-in…");
   fb.onAuth(fb.auth, (user) => {
     state.user = user;
-    if (user) { showApp(); subscribeAll(); }
-    else { showAuth(); unsubscribeAll(); }
+    if (user) {
+      DIAG.step("auth", "Sign-in", "ok", "Signed in as " + user.email);
+      showApp(); subscribeAll(); runChecks();
+    } else {
+      DIAG.step("auth", "Sign-in", "wait", "Signed out.");
+      showAuth(); unsubscribeAll();
+    }
   });
 
   $("loginForm").addEventListener("submit", async (e) => {
@@ -361,10 +517,11 @@ let fb = null; // { auth, db, fns... } filled after dynamic import
     $("loginErr").textContent = "";
     try { await fb.signIn(fb.auth, $("loginEmail").value.trim(), $("loginPw").value); }
     catch (err) {
-      $("loginErr").textContent = ({
-        "auth/invalid-credential": "Email or password doesn't match. Check with your admin if you need a reset.",
-        "auth/too-many-requests": "Too many attempts — wait a minute and try again.",
-      })[err.code] || "Couldn't sign in: " + (err.code || err.message);
+      const msg = explainError(err);
+      $("loginErr").textContent = msg;
+      DIAG.err("sign-in", (err.code || err.message) + " → " + msg);
+      if ((err.code || "").includes("unauthorized-domain"))
+        DIAG.step("host", "This page's address", "fail", msg);
     }
   });
   $("signOutBtn").addEventListener("click", () => fb.signOut(fb.auth));
@@ -385,7 +542,15 @@ function subscribeAll() {
     state[target] = out;
     setConn("ok", "Live");
     renderAll();
-  }, (err) => { setConn("err", "Connection error"); toast("Couldn't load " + name + " — check Firestore rules.", true); console.error(err); });
+    if (target === "accounts") runChecks();
+  }, (err) => {
+    setConn("err", "Connection error");
+    const msg = explainError(err);
+    toast("Couldn't load " + name + " — " + msg, true);
+    DIAG.err("load:" + name, (err.code || err.message) + " → " + msg);
+    DIAG.step("fs", "Database reachable", "fail", msg);
+    console.error(err);
+  });
   state.unsub.push(sub("stores", "stores"), sub("vendors", "vendors"), sub("accounts", "accounts"));
   state.unsub.push(fb.onSnapshot(fb.doc(fb.db, "settings", "app"), (d) => { state.settings = d.data() || {}; }));
   subscribeStatusYear();
@@ -398,7 +563,7 @@ function subscribeStatusYear() {
     snap.forEach(d => out[d.id] = d.data());
     state.statusByYm = out;
     renderAll();
-  });
+  }, (err) => { DIAG.err("load:status", err.code || err.message); toast("Couldn't load the month data — " + explainError(err), true); });
 }
 function unsubscribeAll(){ state.unsub.forEach(u => u && u()); state.unsub = []; if (state.unsubStatus){ state.unsubStatus(); state.unsubStatus = null; } }
 
@@ -439,7 +604,7 @@ async function setMark(aid, val) {
       year: state.ui.year, month: state.ui.month,
       entries: { [aid]: { v: next, by: state.user.email, at: fb.serverTimestamp() } },
     }, { merge: true });
-  } catch (e) { toast("Save failed — are you still signed in?", true); console.error(e); }
+  } catch (e) { const m = explainError(e); toast("Save failed — " + m, true); DIAG.err("save-mark", (e.code||e.message) + " → " + m); console.error(e); }
 }
 
 /* ---------------------------- Rendering ---------------------------- */
@@ -713,7 +878,7 @@ function storeWizard(editId) {
         await batch.commit();
       }
       openAdmin("stores");
-    } catch (e) { toast("Save failed.", true); console.error(e); }
+    } catch (e) { toast("Save failed — " + explainError(e), true); DIAG.err("save", e.code||e.message); console.error(e); }
   });
 
   if (editId) $("stRetire").addEventListener("click", async () => {
@@ -726,7 +891,7 @@ function storeWizard(editId) {
       await batch.commit();
       toast("Store retired — its accounts end " + ymEnd + ". History stays visible.");
       openAdmin("stores");
-    } catch (e) { toast("Retire failed.", true); console.error(e); }
+    } catch (e) { toast("Retire failed — " + explainError(e), true); DIAG.err("retire", e.code||e.message); console.error(e); }
   });
 }
 
@@ -826,7 +991,7 @@ function accountForm(editId) {
     };
     const aid = editId || `${book.toLowerCase()}--${vId}--${sId}--${digits.slice(-4) || Math.random().toString(36).slice(2,6)}`;
     try { await fb.setDoc(fb.doc(fb.db, "accounts", aid), rec, { merge: true }); toast("Account saved."); openAdmin("accounts"); }
-    catch (e) { toast("Save failed.", true); console.error(e); }
+    catch (e) { toast("Save failed — " + explainError(e), true); DIAG.err("save", e.code||e.message); console.error(e); }
   });
 }
 
@@ -929,7 +1094,7 @@ async function importSeed() {
     }
     log("");
     toast(`Import complete — ${Object.keys(seed.accounts).length} accounts across ${Object.keys(seed.stores).length} stores.`);
-  } catch (e) { toast("Import failed partway — safe to re-run, it merges.", true); console.error(e); }
+  } catch (e) { toast("Import failed partway — " + explainError(e) + " (Safe to re-run; it merges.)", true); DIAG.err("import", e.code||e.message); console.error(e); }
 }
 </script>
 </body>
