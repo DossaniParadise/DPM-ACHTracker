@@ -203,6 +203,18 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 .gate code{background:var(--paper); border-radius:6px; padding:2px 6px; font-size:.78rem}
 .gate ol{padding-left:18px; font-size:.82rem; color:var(--ink)}
 .hidden{display:none!important}
+.sync-banner{display:flex; align-items:center; gap:10px; background:var(--navy-soft); border:1px solid #cfc9f5; color:var(--navy-deep); border-radius:10px; padding:8px 12px; margin:0 14px 10px; font-size:.8rem}
+.sync-banner b{font-weight:800}
+.sync-banner .spacer{flex:1}
+.sync-banner .btn{padding:5px 10px; font-size:.75rem}
+.fm-sec{margin-top:16px; border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--card)}
+.fm-sec>h4{margin:0 0 8px; font-size:.7rem; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
+.fm-row{display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); font-size:.82rem; flex-wrap:wrap}
+.fm-row:last-child{border-bottom:0}
+.fm-row .grow{flex:1; min-width:160px}
+.fm-row .how{font-size:.68rem; color:var(--muted)}
+.fm-row select{padding:5px 8px; border:1px solid var(--line); border-radius:7px; font-size:.76rem}
+.fm-ok{color:var(--saved); font-weight:800}
 /* Calendar view */
 .cal-wrap{padding:12px}
 .cal-dows{display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:6px}
@@ -354,6 +366,12 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
     <button class="btn" id="csvBtn" title="Download this month's view as CSV">CSV</button>
   </div>
 
+  <div id="syncBanner" class="sync-banner hidden">
+    <span id="syncBannerTxt"></span><span class="spacer"></span>
+    <button class="btn primary" id="syncReview">Review</button>
+    <button class="btn" id="syncDismiss">Not now</button>
+  </div>
+
   <div class="summary" id="summary"></div>
 
   <div class="main">
@@ -449,6 +467,7 @@ const state = {
 };
 
 let fb = null; // { auth, db, fns... } filled after dynamic import
+let fmChecked = false; // background FindMi drift check runs once per page load
 
 /* ---------------------------- Diagnostics ---------------------------- */
 /** Translate a Firebase error into plain English + which README step fixes it. */
@@ -618,6 +637,7 @@ function subscribeAll() {
     setConn("ok", "Live");
     renderAll();
     if (target === "accounts") runChecks();
+    if (target === "stores") maybeCheckFindmi();
   }, (err) => {
     setConn("err", "Connection error");
     const msg = explainError(err);
@@ -627,7 +647,7 @@ function subscribeAll() {
     console.error(err);
   });
   state.unsub.push(sub("stores", "stores"), sub("vendors", "vendors"), sub("accounts", "accounts"));
-  state.unsub.push(fb.onSnapshot(fb.doc(fb.db, "settings", "app"), (d) => { state.settings = d.data() || {}; }));
+  state.unsub.push(fb.onSnapshot(fb.doc(fb.db, "settings", "app"), (d) => { state.settings = d.data() || {}; maybeCheckFindmi(); }));
   subscribeStatusYear();
 }
 function subscribeStatusYear() {
@@ -1279,57 +1299,197 @@ function accountForm(editId) {
   });
 }
 
-/* ---- FindMi sync tab ---- */
+/* ---- FindMi: fetch, smart matching, diff, sync tab ---- */
+function fmNorm(s)  { return String(s||"").toLowerCase().replace(/^bk\s*/,"").replace(/[^a-z0-9]+/g,""); }
+function fmDigits(s){ return new Set(String(s||"").match(/\d{3,}/g) || []); }
+function fmBase(s)  { return fmNorm(s).replace(/\d+/g,""); }
+
+async function fetchFindmi(url) {
+  const resp = await fetch(url + (url.includes("?") ? "&" : "?") + "_=" + Date.now(), { cache: "no-store" });
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const data = await resp.json();
+  const entities = data.entities || {};
+  const out = [];
+  for (const [fmId, r] of Object.entries(data.restaurants || {})) {
+    const raw = ((r.storeName || r.name || "") + "").trim();
+    if (!raw) continue;
+    const entity = ((r.assignedEntityId && entities[r.assignedEntityId]?.name) || r.entity || "").trim();
+    out.push({ fmId, name: raw.replace(/^BK\s+/i, ""), entity, number: String(r.storeNumber ?? "").trim() });
+  }
+  return out;
+}
+
+/** Match one FindMi store against ours: linked id → exact name → store number → base name → similarity. */
+function matchFindmiStore(fm, storeList) {
+  let hit = storeList.filter(([,s]) => s.findmiId && s.findmiId === fm.fmId);
+  if (hit.length === 1) return { sid: hit[0][0], how: "linked earlier" };
+  const n = fmNorm(fm.name);
+  hit = storeList.filter(([,s]) => fmNorm(s.name) === n);
+  if (hit.length === 1) return { sid: hit[0][0], how: "same name" };
+  const dig = fmDigits(fm.name + " " + fm.number);
+  if (dig.size) {
+    hit = storeList.filter(([,s]) => [...fmDigits(s.name)].some(d => dig.has(d)));
+    if (hit.length === 1) return { sid: hit[0][0], how: "store number" };
+  }
+  const b = fmBase(fm.name);
+  if (b) {
+    hit = storeList.filter(([,s]) => fmBase(s.name) === b);
+    if (hit.length === 1) return { sid: hit[0][0], how: "similar name" };
+  }
+  hit = storeList.filter(([,s]) => { const m = fmNorm(s.name); return m && n && (m.includes(n) || n.includes(m)); });
+  if (hit.length === 1) return { sid: hit[0][0], how: "similar name" };
+  return null;
+}
+
+function diffFindmi(fmList) {
+  const taken = new Set();
+  const matched = [], news = [];
+  for (const fm of fmList) {
+    const m = matchFindmiStore(fm, Object.entries(state.stores).filter(([sid]) => !taken.has(sid)));
+    if (m) {
+      taken.add(m.sid);
+      const s = state.stores[m.sid];
+      matched.push({ fm, sid: m.sid, how: m.how,
+        needsLink: s.findmiId !== fm.fmId,
+        entityDiff: fm.entity && fm.entity !== (s.entity || "") ? fm.entity : null,
+        retiredHere: s.active === false });
+    } else news.push(fm);
+  }
+  const gone = Object.entries(state.stores).filter(([sid, s]) => !taken.has(sid) && s.active !== false);
+  return { matched, news, gone };
+}
+
+async function maybeCheckFindmi() {
+  if (fmChecked || !state.user || !state.settings.findmiUrl || !Object.keys(state.stores).length) return;
+  fmChecked = true;
+  try {
+    const d = diffFindmi(await fetchFindmi(state.settings.findmiUrl));
+    if (!d.news.length && !d.gone.length) return;
+    const parts = [];
+    if (d.news.length) parts.push(`<b>${d.news.length}</b> new store${d.news.length>1?"s":""}`);
+    if (d.gone.length) parts.push(`<b>${d.gone.length}</b> no longer listed`);
+    $("syncBannerTxt").innerHTML = "FindMi has changes: " + parts.join(" · ") + ". Nothing changes until you review.";
+    $("syncBanner").classList.remove("hidden");
+    $("syncReview").onclick = () => { $("syncBanner").classList.add("hidden"); openAdmin("sync"); };
+    $("syncDismiss").onclick = () => $("syncBanner").classList.add("hidden");
+  } catch (e) { DIAG.err("findmi-check", e.message || e); }   // quiet in the background; the sync tab surfaces errors
+}
+
 function renderAdminSync() {
   $("adminBody").innerHTML = `
-    <div class="note">Pulls the store directory from your FindMi API and proposes any stores that aren't in this log yet, with their entity filled in. Nothing is added until you confirm.</div>
+    <div class="note">Compares the FindMi store directory against this log. Existing stores are <b>matched</b> (by name, store number, or an earlier link) — never re-imported. <b>Nothing is ever deleted:</b> a store that leaves FindMi keeps every past month; you can only choose to stop expecting it going forward.</div>
     <label>FindMi API URL</label>
     <input type="url" id="fmUrl" value="${esc(state.settings.findmiUrl || "")}" placeholder="https://…vercel.app/api/dpm-alignment">
     <div class="actions" style="justify-content:flex-start">
-      <button class="btn primary" id="fmFetch">Fetch stores</button>
+      <button class="btn primary" id="fmFetch">Compare with FindMi</button>
     </div>
     <div id="fmResults"></div>`;
-  $("fmFetch").addEventListener("click", async () => {
-    const url = $("fmUrl").value.trim();
-    if (!url) return toast("Enter the FindMi API URL first.", true);
+  $("fmFetch").addEventListener("click", runFindmiCompare);
+  if (state.settings.findmiUrl) runFindmiCompare();   // auto-run when a URL is saved
+}
+
+async function runFindmiCompare() {
+  const url = $("fmUrl").value.trim();
+  if (!url) return toast("Enter the FindMi API URL first.", true);
+  if (url !== state.settings.findmiUrl) {
     try { await fb.setDoc(fb.doc(fb.db, "settings", "app"), { findmiUrl: url }, { merge: true }); } catch {}
-    $("fmResults").innerHTML = `<div class="sub">Fetching…</div>`;
-    try {
-      const resp = await fetch(url + (url.includes("?") ? "&" : "?") + "_=" + Date.now(), { cache: "no-store" });
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      const data = await resp.json();
-      const restaurants = data.restaurants || {};
-      const entities = data.entities || {};
-      const normName = (s) => String(s||"").toLowerCase().replace(/^bk\s+/,"").replace(/[^a-z0-9#]+/g,"");
-      const existing = new Set(Object.values(state.stores).map(s => normName(s.name)));
-      const proposals = [];
-      for (const r of Object.values(restaurants)) {
-        const name = (r.storeName || r.name || "").trim();
-        if (!name) continue;
-        const ent = (r.assignedEntityId && entities[r.assignedEntityId]?.name) || r.entity || "";
-        const short = name.replace(/^BK\s+/i, "");
-        if (!existing.has(normName(name)) && !existing.has(normName(short))) proposals.push({ name: short, entity: ent.trim() });
-      }
-      if (!proposals.length) {
-        $("fmResults").innerHTML = `<div class="note">Every FindMi store is already in the log — nothing to add.</div>`;
-        return;
-      }
-      $("fmResults").innerHTML = `
-        <div class="sub" style="margin-top:12px">New in FindMi — check the ones to add:</div>
-        <div class="checklist">${proposals.map((p,i) =>
-          `<label><input type="checkbox" checked data-i="${i}"> ${esc(p.name)} ${p.entity ? `<span class="acct">— ${esc(p.entity)}</span>` : ""}</label>`).join("")}</div>
-        <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="fmAdd">Add selected stores</button></div>`;
-      $("fmAdd").addEventListener("click", async () => {
-        const picked = [...$("fmResults").querySelectorAll("input:checked")].map(i => proposals[+i.dataset.i]);
-        const batch = fb.writeBatch(fb.db);
-        picked.forEach(p => batch.set(fb.doc(fb.db, "stores", slug(p.name)), { name: p.name, entity: p.entity, active: true }, { merge: true }));
-        await batch.commit();
-        toast(`Added ${picked.length} stores. Next: open each in Stores → Edit, or add their accounts with the clone wizard.`);
-        openAdmin("stores");
-      });
-    } catch (e) {
-      $("fmResults").innerHTML = `<div class="note warn">Couldn't reach FindMi (${esc(e.message)}). If this keeps happening the API may not allow requests from this site — see the CORS note in the README.</div>`;
+  }
+  $("fmResults").innerHTML = `<div class="sub">Comparing…</div>`;
+  let d;
+  try { d = diffFindmi(await fetchFindmi(url)); }
+  catch (e) {
+    DIAG.err("findmi", e.message || e);
+    $("fmResults").innerHTML = `<div class="note warn">Couldn't reach FindMi (${esc(e.message)}). If this keeps happening the API may not allow requests from this site — see the CORS note in the README.</div>`;
+    return;
+  }
+  const ymNow = ymKey(state.ui.year, state.ui.month);
+  const nextYm = ymKey(state.ui.month === 12 ? state.ui.year + 1 : state.ui.year, state.ui.month === 12 ? 1 : state.ui.month + 1);
+  const storeOpts = Object.entries(state.stores).filter(([,s]) => s.active !== false)
+    .sort((a,b) => a[1].name.localeCompare(b[1].name))
+    .map(([id, st]) => `<option value="${esc(id)}">${esc(st.name)}</option>`).join("");
+
+  const matchedRows = d.matched.map(m => {
+    const s = state.stores[m.sid];
+    const extras = [];
+    if (m.entityDiff) extras.push(`<label style="font-size:.76rem"><input type="checkbox" checked data-ent="${esc(m.sid)}" data-val="${esc(m.entityDiff)}"> entity → <b>${esc(m.entityDiff)}</b></label>`);
+    if (m.retiredHere) extras.push(`<label style="font-size:.76rem"><input type="checkbox" data-resume="${esc(m.sid)}"> back in FindMi — resume tracking (accounts keep their end dates; re-clone or edit them under Accounts)</label>`);
+    return `<div class="fm-row"><span class="fm-ok">✓</span><span class="grow">${esc(s.name)}${m.fm.name !== s.name ? ` <span class="how">= FindMi “${esc(m.fm.name)}”</span>` : ""}</span><span class="how">${esc(m.how)}</span>${extras.join(" ")}</div>`;
+  }).join("");
+
+  const newRows = d.news.map((p, i) => `
+    <div class="fm-row">
+      <label class="grow"><input type="checkbox" checked data-new="${i}"> <b>${esc(p.name)}</b>${p.entity ? ` <span class="how">— ${esc(p.entity)}</span>` : ""}</label>
+      <span class="how">clone vendors from</span>
+      <select data-tpl="${i}"><option value="">— none, add accounts later —</option>${storeOpts}</select>
+    </div>`).join("");
+
+  const goneRows = d.gone.map(([sid, s]) => `
+    <div class="fm-row">
+      <span class="grow">${esc(s.name)}${s.entity ? ` <span class="how">— ${esc(s.entity)}</span>` : ""}</span>
+      <label style="font-size:.76rem"><input type="checkbox" data-gone="${esc(sid)}"> stop expecting after ${ymNow} (keeps all history; ${nextYm} onward won't count it)</label>
+    </div>`).join("");
+
+  $("fmResults").innerHTML = `
+    ${d.matched.length ? `<div class="fm-sec"><h4>Matched — already in the log (${d.matched.length})</h4>${matchedRows}</div>` : ""}
+    ${d.news.length ? `<div class="fm-sec"><h4>New in FindMi (${d.news.length}) — checked ones will be added, tracking starts ${ymNow}</h4>${newRows}</div>`
+                    : `<div class="fm-sec"><h4>New in FindMi</h4><div class="fm-row">None — every FindMi store is matched.</div></div>`}
+    ${d.gone.length ? `<div class="fm-sec"><h4>No longer in FindMi (${d.gone.length}) — nothing happens unless you tick a box</h4>${goneRows}</div>` : ""}
+    <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="fmApply">Apply selected changes</button></div>`;
+
+  $("fmApply").addEventListener("click", async () => {
+    const box = $("fmResults");
+    const writes = [];
+    // link matches + entity updates + resumes (links are metadata that make future syncs exact)
+    for (const m of d.matched) {
+      const upd = {};
+      if (m.needsLink) upd.findmiId = m.fm.fmId;
+      const entCb = box.querySelector(`[data-ent="${CSS.escape(m.sid)}"]`);
+      if (entCb && entCb.checked) upd.entity = entCb.dataset.val;
+      const resCb = box.querySelector(`[data-resume="${CSS.escape(m.sid)}"]`);
+      if (resCb && resCb.checked) upd.active = true;
+      if (Object.keys(upd).length) writes.push(["set", "stores", m.sid, upd]);
     }
+    // new stores (+ optional cloned vendor accounts)
+    let addedStores = 0, addedAccounts = 0;
+    d.news.forEach((p, i) => {
+      const cb = box.querySelector(`[data-new="${i}"]`);
+      if (!cb || !cb.checked) return;
+      const sid = slug(p.name);
+      writes.push(["set", "stores", sid, { name: p.name, entity: p.entity, active: true, findmiId: p.fmId }]);
+      addedStores++;
+      const tpl = box.querySelector(`[data-tpl="${i}"]`)?.value;
+      if (tpl) for (const [srcId, src] of Object.entries(state.accounts)) {
+        if (src.storeId !== tpl || src.activeTo) continue;
+        const aid = `${src.book.toLowerCase()}--${src.vendorId}--${sid}--new-${Math.random().toString(36).slice(2,6)}`;
+        writes.push(["setFull", "accounts", aid, { ...src, store: p.name, storeId: sid, accountNumber: "", last4: "",
+          activeFrom: ymNow, activeTo: null, notes: "Cloned from " + src.store + " — fill in account #" }]);
+        addedAccounts++;
+      }
+    });
+    // retirements — end expectation going forward, delete nothing
+    let retired = 0;
+    for (const [sid] of d.gone) {
+      const cb = box.querySelector(`[data-gone="${CSS.escape(sid)}"]`);
+      if (!cb || !cb.checked) continue;
+      writes.push(["set", "stores", sid, { active: false }]);
+      for (const [aid, a] of Object.entries(state.accounts))
+        if (a.storeId === sid && (!a.activeTo || a.activeTo > ymNow)) writes.push(["set", "accounts", aid, { activeTo: ymNow }]);
+      retired++;
+    }
+    if (!writes.length) return toast("Nothing selected — no changes made.");
+    try {
+      for (let i = 0; i < writes.length; i += 400) {
+        const batch = fb.writeBatch(fb.db);
+        writes.slice(i, i + 400).forEach(([op, c, id, dta]) =>
+          batch.set(fb.doc(fb.db, c, id), dta, op === "setFull" ? undefined : { merge: true }));
+        await batch.commit();
+      }
+      const bits = [];
+      if (addedStores) bits.push(`${addedStores} store${addedStores>1?"s":""} added${addedAccounts ? ` with ${addedAccounts} cloned accounts` : ""}`);
+      if (retired) bits.push(`${retired} set to stop after ${ymNow}`);
+      toast("FindMi sync applied" + (bits.length ? " — " + bits.join(", ") : " — matches linked") + ". History untouched.");
+      runFindmiCompare();
+    } catch (e) { toast("Sync failed — " + explainError(e), true); DIAG.err("findmi-apply", e.code || e.message); console.error(e); }
   });
 }
 
