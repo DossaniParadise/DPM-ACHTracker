@@ -232,6 +232,8 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 .cal-dcount{font-size:.66rem; font-weight:800; color:var(--red)}
 .cal-dsaved{font-size:.64rem; font-weight:800; color:#fff; background:var(--saved); border-radius:9px; padding:1px 6px}
 .okc{color:var(--saved)}
+#sideBody tr.on td{background:var(--navy-soft); font-weight:800}
+#sideBody tr{cursor:pointer}
 .cal-chips{display:flex; flex-direction:column; gap:3px; min-width:0}
 .chip{display:block; width:100%; border:1px solid var(--line); background:var(--paper); border-radius:6px; padding:2px 6px; font-size:.68rem; cursor:pointer; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink)}
 .chip b{font-weight:700}
@@ -396,7 +398,7 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
     </div>
     <aside class="side" id="sidePanel">
       <h3>Missing by store</h3>
-      <div class="hint">This month · click a store to filter</div>
+      <div class="hint">This month · click a store to filter, click again to clear</div>
       <table><tbody id="sideBody"></tbody></table>
     </aside>
   </div>
@@ -470,6 +472,7 @@ const state = {
 
 let fb = null; // { auth, db, fns... } filled after dynamic import
 let fmChecked = false; // background FindMi drift check runs once per page load
+let _numMap = null;    // store-number lookup cache, rebuilt when stores change
 
 /* ---------------------------- Diagnostics ---------------------------- */
 /** Translate a Firebase error into plain English + which README step fixes it. */
@@ -639,7 +642,7 @@ function subscribeAll() {
     setConn("ok", "Live");
     renderAll();
     if (target === "accounts") runChecks();
-    if (target === "stores") maybeCheckFindmi();
+    if (target === "stores") { _numMap = null; maybeCheckFindmi(); }
   }, (err) => {
     setConn("err", "Connection error");
     const msg = explainError(err);
@@ -680,18 +683,32 @@ function storeParts(name) {
   const city = s.replace(/#/g, " ").replace(/\s+/g, " ").trim().replace(/^[\s,-]+|[\s,-]+$/g, "");
   return { city, num };
 }
-/** Display-only store name standardization: "BK City #Number". Root data is never changed. */
+/** Known store numbers, keyed by normalized name (from the name itself or the FindMi-filled number field). */
+function storeNumMap() {
+  if (_numMap) return _numMap;
+  _numMap = {};
+  for (const s of Object.values(state.stores)) {
+    const key = fmNorm(s.name);
+    const num = storeParts(s.name).num || s.number || "";
+    if (key && num) _numMap[key] = num;
+  }
+  return _numMap;
+}
+/** Display-only store name standardization: "BK City #Number". Root data is never changed.
+    Non-BK locations (Paradise Quick Stops) pass through untouched. */
 function dspStore(name) {
   const raw = String(name || "").trim();
-  if (!raw || /consolidated/i.test(raw)) return raw;
+  if (!raw || /consolidated|paradise|quick\s*stop/i.test(raw)) return raw;
   const { city, num } = storeParts(raw);
   if (!city && !num) return raw;
-  return "BK " + (city || "Store") + (num ? " #" + num : "");
+  const n = num || storeNumMap()[fmNorm(raw)] || "";
+  return "BK " + (city || "Store") + (n ? " #" + n : "");
 }
 /** Alphabetize by city (so "Burger King #13917 Belton" sorts under B for Belton). */
 function storeSortKey(name) {
   const raw = String(name || "");
   if (/consolidated/i.test(raw)) return "zzz " + raw.toLowerCase();
+  if (/paradise|quick\s*stop/i.test(raw)) return raw.toLowerCase();
   const p = storeParts(raw);
   return (p.city || raw).toLowerCase() + " " + p.num;
 }
@@ -881,6 +898,7 @@ function renderMain() {
   document.querySelector(".table-scroll").classList.toggle("hidden", v !== "list");
   ["vwCal","vwTiles","vwList"].forEach(id => $(id).classList.toggle("on",
     { vwCal:"calendar", vwTiles:"tiles", vwList:"list" }[id] === v));
+  $("gSort").classList.toggle("hidden", v === "calendar");   // grouping applies only to tiles and the list
   if (showEmptyState(rows)) { $("calWrap").innerHTML = ""; $("tilesWrap").innerHTML = ""; $("gridBody").innerHTML = ""; return; }
   if (v === "calendar") renderCalendar(rows, ym);
   else if (v === "tiles") renderTiles(rows, ym);
@@ -1114,9 +1132,9 @@ function renderSide() {
   }
   const rows = Object.entries(per).sort((x,y) => y[1].missing - x[1].missing || cmpStore(x[1].name, y[1].name));
   $("sideBody").innerHTML = rows.map(([sid, s]) =>
-    `<tr data-sid="${esc(sid)}"><td>${esc(s.name)}</td><td class="n ${s.missing===0?"zero":""}">${s.missing===0?"✓":s.missing}</td></tr>`).join("");
+    `<tr data-sid="${esc(sid)}" class="${sid === state.ui.fStore ? "on" : ""}"><td>${esc(s.name)}</td><td class="n ${s.missing===0?"zero":""}">${s.missing===0?"✓":s.missing}</td></tr>`).join("");
   $("sideBody").querySelectorAll("tr").forEach(tr =>
-    tr.addEventListener("click", () => { state.ui.fStore = tr.dataset.sid; renderAll(); }));
+    tr.addEventListener("click", () => { state.ui.fStore = state.ui.fStore === tr.dataset.sid ? "" : tr.dataset.sid; renderAll(); }));
 }
 
 /* ---------------------------- Toolbar wiring ---------------------------- */
@@ -1627,7 +1645,8 @@ async function fetchFindmi(url) {
     const raw = ((r.storeName || r.name || "") + "").trim();
     if (!raw) continue;
     const entity = ((r.assignedEntityId && entities[r.assignedEntityId]?.name) || r.entity || "").trim();
-    out.push({ fmId, name: raw.replace(/^BK\s+/i, ""), entity, number: String(r.storeNumber ?? "").trim() });
+    out.push({ fmId, name: raw.replace(/^BK\s+/i, ""), entity,
+      number: String(r.storeNumber ?? "").trim() || storeParts(raw).num });
   }
   return out;
 }
@@ -1662,8 +1681,10 @@ function diffFindmi(fmList) {
     if (m) {
       taken.add(m.sid);
       const s = state.stores[m.sid];
+      const ourNum = storeParts(s.name).num || s.number || "";
       matched.push({ fm, sid: m.sid, how: m.how,
         needsLink: s.findmiId !== fm.fmId,
+        numFill: !ourNum && fm.number ? fm.number : null,
         entityDiff: fm.entity && fm.entity !== (s.entity || "") ? fm.entity : null,
         retiredHere: s.active === false });
     } else news.push(fm);
@@ -1713,6 +1734,7 @@ async function runFindmiCompare() {
   const matchedRows = d.matched.map(m => {
     const s = state.stores[m.sid];
     const extras = [];
+    if (m.numFill) extras.push(`<span class="how">will show #${esc(m.numFill)}</span>`);
     if (m.entityDiff) extras.push(`<label style="font-size:.76rem"><input type="checkbox" checked data-ent="${esc(m.sid)}" data-val="${esc(m.entityDiff)}"> entity → <b>${esc(m.entityDiff)}</b></label>`);
     if (m.retiredHere) extras.push(`<label style="font-size:.76rem"><input type="checkbox" data-resume="${esc(m.sid)}"> back in FindMi — resume tracking (accounts keep their end dates; re-clone or edit them under Accounts)</label>`);
     return `<div class="fm-row"><span class="fm-ok">✓</span><span class="grow">${esc(dspStore(s.name))}${m.fm.name !== s.name ? ` <span class="how">= FindMi “${esc(m.fm.name)}”</span>` : ""}</span><span class="how">${esc(m.how)}</span>${extras.join(" ")}</div>`;
@@ -1745,6 +1767,7 @@ async function runFindmiCompare() {
     for (const m of d.matched) {
       const upd = {};
       if (m.needsLink) upd.findmiId = m.fm.fmId;
+      if (m.numFill) upd.number = m.numFill;
       const entCb = box.querySelector(`[data-ent="${CSS.escape(m.sid)}"]`);
       if (entCb && entCb.checked) upd.entity = entCb.dataset.val;
       const resCb = box.querySelector(`[data-resume="${CSS.escape(m.sid)}"]`);
@@ -1780,10 +1803,11 @@ async function runFindmiCompare() {
     }
     if (!writes.length) return toast("Nothing selected — no changes made.");
     // ---- pre-flight: show exactly what will happen before anything is written ----
-    const linked = d.matched.filter(m => m.needsLink).length;
+    const linked = d.matched.filter(m => m.needsLink || m.numFill).length;
+    const numFills = d.matched.filter(m => m.numFill).length;
     const lines = [];
     if (addedStores) lines.push(`Add <b>${addedStores}</b> store${addedStores>1?"s":""}${addedAccounts ? ` with <b>${addedAccounts}</b> cloned vendor accounts` : ""} — counted from <b>${ymNow}</b> onward only.`);
-    if (linked) lines.push(`Link <b>${linked}</b> matched store${linked>1?"s":""} to FindMi (metadata only — no counts change).`);
+    if (linked) lines.push(`Link <b>${linked}</b> matched store${linked>1?"s":""} to FindMi${numFills ? ` and fill in <b>${numFills}</b> missing store number${numFills>1?"s":""} for display` : ""} (metadata only — no counts change).`);
     if (retired) lines.push(`<b>${retired}</b> store${retired>1?"s stop":" stops"} being expected after <b>${ymNow}</b> — every month up to and including ${ymNow} keeps its counts and marks.`);
     lines.push(`Months before ${ymNow}: <b>completely untouched</b>. Nothing is deleted, ever.`);
     const ok = await new Promise((res) => {
