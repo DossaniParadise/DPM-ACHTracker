@@ -1519,7 +1519,7 @@ function consolidateWizard(vendorId) {
     <div class="row3">
       <div><label>Consolidated account #</label><input type="text" id="cwAcct" placeholder="optional — fill when known"></div>
       <div><label>Est. receival</label><input type="text" id="cwRcv" value="${esc(est.estReceival || "")}" placeholder="e.g. 5 next month"></div>
-      <div><label>Log</label><select id="cwBook"><option>BK</option><option>DPR</option></select></div>
+      <div><label>Invoice log <span class="acct">(entity)</span></label><select id="cwBook"><option>BK</option><option>DPR</option></select></div>
     </div>
     <label>Starts (YYYY-MM)</label><input type="text" id="cwFrom" value="${start}">
     <div class="note" style="margin-top:8px">Forward-only: months before the start month are completely untouched.</div>
@@ -1576,12 +1576,16 @@ function vendorWizard(vendorId) {
       <div><label>Est. invoice date</label><input type="text" id="vwInv" placeholder="optional"></div>
       <div><label>Est. due / draft</label><input type="text" id="vwDue" placeholder="optional"></div>
     </div>
-    <div class="row2">
-      <div><label>Log</label><select id="vwBook">
-        <option value="auto">Auto — match each store (DPR stores → DPR, rest → BK)</option>
-        <option value="BK">BK for all</option><option value="DPR">DPR for all</option></select></div>
-      <div><label>Tracking starts</label><input type="text" id="vwFrom" value="${ymNow}"></div>
-    </div>
+    <label>Tracking starts</label><input type="text" id="vwFrom" value="${ymNow}">
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer; font-size:.76rem; color:var(--muted)">Which invoice log? (set automatically — open only if you need to override)</summary>
+      <div class="note" style="margin-top:6px">Your invoices were tracked in two logs, <b>BK</b> and <b>DPR</b>, one per entity — it's the small badge on each row and the "All logs" filter. Each new account is filed by its store's entity, which is right in almost every case.</div>
+      <select id="vwBook">
+        <option value="auto">Automatic — file each account by its store's entity</option>
+        <option value="BK">Force BK for all of them</option>
+        <option value="DPR">Force DPR for all of them</option>
+      </select>
+    </details>
     <label>Stores it bills <span class="acct">(<a href="#" id="vwAll">all</a> · <a href="#" id="vwNone">none</a>)</span></label>
     ${stores.length ? `<div class="checklist">${stores.map(([sid, s]) =>
       `<label><input type="checkbox" value="${esc(sid)}"> ${esc(dspStore(s.name))}${s.entity ? ` <span class="acct">(${esc(s.entity)})</span>` : ""}</label>`).join("")}</div>`
@@ -1668,7 +1672,7 @@ function accountForm(editId) {
     </div>
     <div class="row2">
       <div><label>Account #</label><input type="text" id="afAcct" value="${esc(a.accountNumber)}"></div>
-      <div><label>Log</label><select id="afBook">${books.map(b => `<option ${b===a.book?"selected":""}>${esc(b)}</option>`).join("")}</select></div>
+      <div><label>Invoice log <span class="acct">(BK or DPR entity)</span></label><select id="afBook">${books.map(b => `<option ${b===a.book?"selected":""}>${esc(b)}</option>`).join("")}</select></div>
     </div>
     <div class="row3">
       <div><label>Est. receival (day of month)</label><input type="text" id="afRcv" value="${esc(a.estReceival)}" placeholder="e.g. 22-23, or 5 next month"></div>
