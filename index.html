@@ -228,8 +228,10 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 .cal-dnum{font-weight:800; font-size:.78rem; background:none; border:0; cursor:pointer; color:var(--ink); padding:2px 6px; border-radius:6px}
 .cal-dnum:hover{background:var(--navy-soft)}
 .cal-dnum[disabled]{cursor:default; color:var(--muted); background:none}
+.cal-dbadges{display:flex; gap:4px; align-items:center}
 .cal-dcount{font-size:.66rem; font-weight:800; color:var(--red)}
-.cal-dcount.done{color:var(--saved)}
+.cal-dsaved{font-size:.64rem; font-weight:800; color:#fff; background:var(--saved); border-radius:9px; padding:1px 6px}
+.okc{color:var(--saved)}
 .cal-chips{display:flex; flex-direction:column; gap:3px; min-width:0}
 .chip{display:block; width:100%; border:1px solid var(--line); background:var(--paper); border-radius:6px; padding:2px 6px; font-size:.68rem; cursor:pointer; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink)}
 .chip b{font-weight:700}
@@ -665,6 +667,16 @@ function unsubscribeAll(){ state.unsub.forEach(u => u && u()); state.unsub = [];
 /* ---------------------------- Core logic ---------------------------- */
 function isActive(acc, ym) { return acc.activeFrom <= ym && (!acc.activeTo || acc.activeTo >= ym); }
 function realYm() { const d = new Date(); return ymKey(d.getFullYear(), d.getMonth() + 1); }   // the actual current month, regardless of which month is being viewed
+function prevYmOf(ym) { const [y, m] = ym.split("-").map(Number); return ymKey(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1); }
+/** Display-only store name standardization: "BK Name #Number". Root data is never changed. */
+function dspStore(name) {
+  const raw = String(name || "").trim();
+  if (!raw || /consolidated/i.test(raw)) return raw;
+  let s = raw.replace(/^bk\s*/i, "");
+  const m = s.match(/^(.*?)\s*#\s*(\d+)\s*$/);
+  if (m) s = `${m[1].trim()} #${m[2]}`;
+  return "BK " + s;
+}
 function backdateOk(from) {
   if (from >= realYm()) return true;
   return confirm(`Heads up: ${from} is in the past.\n\nStarting tracking from ${from} makes past months EXPECT this — they'll show extra "missing" until marked. Nothing already saved is ever changed; only the expected counts grow.\n\nStart from ${from} anyway? (Cancel to go back and use ${realYm()}.)`);
@@ -675,7 +687,7 @@ function monthStats(ym, filterFn) {
   let expected = 0, saved = 0, flagged = 0;
   for (const [aid, acc] of Object.entries(state.accounts)) {
     if (!isActive(acc, ym)) continue;
-    if (filterFn && !filterFn(acc, aid)) continue;
+    if (filterFn && !filterFn(acc, aid, ym)) continue;
     expected++;
     const v = markOf(aid, ym)?.v || "";
     if (v === "Y") saved++; else if (v === "N") flagged++;
@@ -683,31 +695,32 @@ function monthStats(ym, filterFn) {
   return { expected, saved, flagged, missing: expected - saved };
 }
 
-function passesFilters(acc, aid) {
+function passesFilters(acc, aid, ym) {
   const u = state.ui;
   if (u.fBook && acc.book !== u.fBook) return false;
-  if (u.fStore && acc.storeId !== u.fStore) return false;
+  if (u.fStore && acc.storeId !== u.fStore && !(acc.storeIds || []).includes(u.fStore)) return false;
   if (u.fVendor && acc.vendorId !== u.fVendor) return false;
   if (u.fStatus && aid !== undefined) {
-    const v = markOf(aid, ymKey(u.year, u.month))?.v || "";
+    const v = markOf(aid, ym || ymKey(u.year, u.month))?.v || "";
     if (u.fStatus === "pending" ? v !== "" : v !== u.fStatus) return false;
   }
   if (u.q) {
-    const hay = `${acc.vendor} ${acc.store} ${acc.accountNumber} ${acc.last4}`.toLowerCase();
+    const hay = `${acc.vendor} ${acc.store} ${dspStore(acc.store)} ${acc.accountNumber} ${acc.last4}`.toLowerCase();
     if (!hay.includes(u.q.toLowerCase())) return false;
   }
   return true;
 }
 
-function setMark(aid, val) {           // toggle: pressing the active button clears it
-  const cur = markOf(aid, ymKey(state.ui.year, state.ui.month))?.v || "";
-  return writeMark(aid, cur === val ? "" : val);
+function setMark(aid, val, cyc) {      // toggle: pressing the active button clears it
+  const ym = cyc || ymKey(state.ui.year, state.ui.month);
+  const cur = markOf(aid, ym)?.v || "";
+  return writeMark(aid, cur === val ? "" : val, ym);
 }
-async function writeMark(aid, next) {  // explicit set ("Y" | "N" | "")
-  const ym = ymKey(state.ui.year, state.ui.month);
+async function writeMark(aid, next, cyc) {  // explicit set ("Y" | "N" | "")
+  const ym = cyc || ymKey(state.ui.year, state.ui.month);
   try {
     await fb.setDoc(fb.doc(fb.db, "status", ym), {
-      year: state.ui.year, month: state.ui.month,
+      year: +ym.slice(0, 4), month: +ym.slice(5),
       entries: { [aid]: { v: next, by: state.user.email, at: fb.serverTimestamp() } },
     }, { merge: true });
   } catch (e) { const m = explainError(e); toast("Save failed — " + m, true); DIAG.err("save-mark", (e.code||e.message) + " → " + m); console.error(e); }
@@ -751,7 +764,7 @@ function renderFilters() {
   const books = [...new Set(Object.values(state.accounts).map(a => a.book))].sort();
   fillSelect($("fBook"), books.map(b => [b, "Log: " + b]), state.ui.fBook, "All logs");
   const stores = Object.entries(state.stores).sort((a,b) => a[1].name.localeCompare(b[1].name));
-  fillSelect($("fStore"), stores.map(([id,s]) => [id, s.name]), state.ui.fStore, "All stores");
+  fillSelect($("fStore"), stores.map(([id,s]) => [id, dspStore(s.name)]), state.ui.fStore, "All stores");
   const vendors = Object.entries(state.vendors).sort((a,b) => a[1].name.localeCompare(b[1].name));
   fillSelect($("fVendor"), vendors.map(([id,v]) => [id, v.name]), state.ui.fVendor, "All vendors");
 }
@@ -785,14 +798,14 @@ function fmtWhen(at) {
 /** "22-23" / "06-07" / "1" → {d1,d2}; unparseable → null (goes to the "no set day" bucket). */
 function parseRange(txt) {
   const s = String(txt || "");
-  if (/next\s*month/i.test(s)) return null;
+  const next = /next\s*month/i.test(s);
   const m = s.match(/(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?/);
   if (!m) return null;
   const d1 = +m[1];
   if (d1 < 1 || d1 > 31) return null;
   let d2 = m[2] ? +m[2] : d1;
   if (d2 < d1 || d2 > 31) d2 = d1;
-  return { d1, d2 };
+  return { d1, d2, next };   // next: arrives that day of the FOLLOWING month (e.g. Amex "5 next month")
 }
 function rangeLabel(r) { return r.d1 === r.d2 ? String(r.d1) : `${r.d1}–${r.d2}`; }
 function statusOf(aid, ym) { return markOf(aid, ym)?.v || ""; }
@@ -800,12 +813,12 @@ function statusCls(v) { return v === "Y" ? "saved" : v === "N" ? "flag" : "pendi
 function statusWeight(v) { return v === "" ? 0 : v === "N" ? 1 : 2; }   // pending first, then N, then saved
 
 function visibleRows(ym) {
-  return Object.entries(state.accounts).filter(([aid, a]) => isActive(a, ym) && passesFilters(a, aid));
+  return Object.entries(state.accounts).filter(([aid, a]) => isActive(a, ym) && passesFilters(a, aid, ym));
 }
 
 function groupKeyOf(aid, a, ym) {
   switch (state.ui.groupBy) {
-    case "store":  return { k: a.store, w: 0 };
+    case "store":  return { k: dspStore(a.store), w: 0 };
     case "date": {
       const r = parseRange(a.estReceival);
       return r ? { k: `Day ${String(r.d1).padStart(2,"0")}${r.d2>r.d1 ? "–"+String(r.d2).padStart(2,"0") : ""}`, w: 0 }
@@ -855,10 +868,13 @@ function renderMain() {
   else renderList(rows, ym);
 }
 
-function chipHtml(aid, a, ym, r) {
+function chipHtml(aid, a, ym, r, suffix) {
   const v = statusOf(aid, ym);
-  const t = `${a.vendor} · ${a.store} · ${a.accountNumber || "…"+a.last4}` + (r ? ` · est. day ${rangeLabel(r)}` : "") + " — click for details";
-  return `<button class="chip ${statusCls(v)}" data-acc="${esc(aid)}" title="${esc(t)}"><b>${esc(a.vendor)}</b> <span class="st">· ${esc(a.store)}</span></button>`;
+  const t = `${a.vendor} · ${dspStore(a.store)} · ${a.accountNumber || "…"+a.last4}`
+    + (r ? ` · est. day ${rangeLabel(r)}${r.next ? " of next month" : ""}` : "")
+    + (suffix ? ` · ${suffix}` : "") + " — click for details";
+  return `<button class="chip ${statusCls(v)}" data-acc="${esc(aid)}" data-cyc="${esc(ym)}" title="${esc(t)}">
+    <b>${esc(a.vendor)}</b> <span class="st">· ${esc(dspStore(a.store))}${suffix ? " · " + esc(suffix) : ""}</span></button>`;
 }
 
 function renderCalendar(rows, ym) {
@@ -867,33 +883,60 @@ function renderCalendar(rows, ym) {
   const firstDow = new Date(y, m - 1, 1).getDay();
   const today = new Date();
   const isThisMonth = today.getFullYear() === y && today.getMonth() + 1 === m;
+  const prev = prevYmOf(ym);
+  const prevName = MONTH_NAMES[+prev.slice(5) - 1];
 
-  const byDay = {}, unsched = [];
+  // this month's cycle: in-month days on the grid; "next month" arrivals into their own tray
+  const byDay = {}, unsched = [], nextTray = [];
   for (const [aid, a] of rows) {
     const r = parseRange(a.estReceival);
     if (!r) { unsched.push([aid, a]); continue; }
-    (byDay[Math.min(r.d1, daysIn)] ||= []).push([aid, a, r]);
+    if (r.next) { nextTray.push([aid, a, r]); continue; }
+    (byDay[Math.min(r.d1, daysIn)] ||= []).push([aid, a, r, ym, ""]);
   }
-  const daySort = (x, y2) => statusWeight(statusOf(x[0], ym)) - statusWeight(statusOf(y2[0], ym))
-    || x[1].vendor.localeCompare(y2[1].vendor);
+  // last month's cycle arriving THIS month (e.g. Amex on the 5th "for July")
+  for (const [aid, a] of Object.entries(state.accounts)) {
+    if (!isActive(a, prev) || !passesFilters(a, aid, prev)) continue;
+    const r = parseRange(a.estReceival);
+    if (!r || !r.next) continue;
+    (byDay[Math.min(r.d1, daysIn)] ||= []).push([aid, a, r, prev, "for " + prevName]);
+  }
+  const wOf = (x) => statusWeight(statusOf(x[0], x[3]));
+  const daySort = (x, y2) => wOf(x) - wOf(y2) || x[1].vendor.localeCompare(y2[1].vendor);
 
   let cells = "";
   for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell blank"></div>`;
   for (let d = 1; d <= daysIn; d++) {
     const list = (byDay[d] || []).sort(daySort);
-    const savedC = list.filter(([aid]) => statusOf(aid, ym) === "Y").length;
-    const chips = list.slice(0, MAX_CHIPS).map(([aid, a, r]) => chipHtml(aid, a, ym, r)).join("");
-    const more = list.length > MAX_CHIPS ? `<button class="cal-more" data-day="${d}">+${list.length - MAX_CHIPS} more</button>` : "";
+    const missing = list.filter((x) => statusOf(x[0], x[3]) !== "Y");
+    const savedC = list.length - missing.length;
+    const chips = missing.slice(0, MAX_CHIPS).map(([aid, a, r, cyc, sfx]) => chipHtml(aid, a, cyc, r, sfx)).join("");
+    const more = missing.length > MAX_CHIPS ? `<button class="cal-more" data-day="${d}">+${missing.length - MAX_CHIPS} more</button>` : "";
     cells += `<div class="cal-cell ${isThisMonth && d === today.getDate() ? "today" : ""} ${list.length ? "" : "quiet"}">
       <div class="cal-dhead"><button class="cal-dnum" data-day="${d}" ${list.length ? "" : "disabled"} title="Open this day">${d}</button>
-        ${list.length ? `<span class="cal-dcount ${savedC === list.length ? "done" : ""}">${savedC}/${list.length}</span>` : ""}</div>
+        <span class="cal-dbadges">${savedC ? `<span class="cal-dsaved" title="${savedC} saved — open the day to see them">✓ ${savedC}</span>` : ""}${missing.length ? `<span class="cal-dcount">${missing.length}</span>` : ""}</span></div>
       <div class="cal-chips">${chips}${more}</div></div>`;
   }
-  const un = unsched.length ? `<div class="cal-unsched"><h4>No set day (${unsched.length}) — est. receival isn't a day of the month</h4>
-      <div class="cal-chips">${unsched.map(([aid, a]) => chipHtml(aid, a, ym, null)).join("")}</div></div>` : "";
+  const trays = [];
+  const trayChips = (arr) => {
+    const miss = arr.filter(([aid,, ,]) => statusOf(aid, ym) !== "Y");
+    const savedC = arr.length - miss.length;
+    return { html: miss.map(([aid, a, r]) => chipHtml(aid, a, ym, r || null, r ? "~" + rangeLabel(r) : "")).join(""), savedC, miss };
+  };
+  if (nextTray.length) {
+    const t = trayChips(nextTray);
+    trays.push(`<div class="cal-unsched"><h4>Arrives early next month (${t.miss.length} to save${t.savedC ? ` · <span class="okc">✓ ${t.savedC} saved</span>` : ""}) — this month's invoice lands on that day of ${MONTH_NAMES[m % 12]}</h4>
+      <div class="cal-chips">${t.html || `<span class="acct">All saved.</span>`}</div></div>`);
+  }
+  if (unsched.length) {
+    const arr = unsched.map(([aid, a]) => [aid, a, null]);
+    const t = trayChips(arr);
+    trays.push(`<div class="cal-unsched"><h4>No set day (${t.miss.length} to save${t.savedC ? ` · <span class="okc">✓ ${t.savedC} saved</span>` : ""})</h4>
+      <div class="cal-chips">${t.html || `<span class="acct">All saved.</span>`}</div></div>`);
+  }
   $("calWrap").innerHTML = `<div class="cal-dows">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => `<div>${d}</div>`).join("")}</div>
-    <div class="cal">${cells}</div>${un}`;
-  $("calWrap").querySelectorAll("[data-acc]").forEach(b => b.addEventListener("click", () => openAccountModal(b.dataset.acc)));
+    <div class="cal">${cells}</div>${trays.join("")}`;
+  $("calWrap").querySelectorAll("[data-acc]").forEach(b => b.addEventListener("click", () => openAccountModal(b.dataset.acc, b.dataset.cyc)));
   $("calWrap").querySelectorAll("[data-day]").forEach(b => b.addEventListener("click", () => openDayModal(+b.dataset.day)));
 }
 
@@ -911,7 +954,7 @@ function renderTiles(rows, ym) {
     const r = parseRange(a.estReceival);
     html += `<div class="tile ${statusCls(v)}" data-acc="${esc(aid)}" role="button" tabindex="0">
       <div class="t-vendor"><span class="nm">${esc(a.vendor)}</span>${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</div>
-      <div class="t-store">${esc(a.store)}</div>
+      <div class="t-store">${esc(dspStore(a.store))}</div>
       <div class="t-acct">${esc(a.accountNumber || "…" + a.last4)}</div>
       <div class="t-est">Est. rcv'l ${r ? rangeLabel(r) : esc(a.estReceival || "—")}</div>
       <div class="stamp">
@@ -944,7 +987,7 @@ function renderList(rows, ym) {
     const meta = v ? `${esc((mark.by||"").split("@")[0])} · ${fmtWhen(mark.at)}` : "";
     html += `<tr>
       <td>${esc(a.vendor)} ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</td>
-      <td>${esc(a.store)}</td>
+      <td>${esc(dspStore(a.store))}</td>
       <td class="acct" title="${esc(a.accountNumber)}">${esc(a.accountNumber || ("…" + a.last4))}</td>
       <td class="est">${esc(a.estReceival)}</td>
       <td class="est">${esc(a.estInvoice)}</td>
@@ -962,21 +1005,21 @@ function renderList(rows, ym) {
 }
 
 /* ------------- Account & day popups ------------- */
-function openAccountModal(aid) { state.ui.accModal = aid; state.ui.dayModal = null; buildAccountModal(aid, true); }
-function openDayModal(d)      { state.ui.dayModal = d;  state.ui.accModal = null; buildDayModal(d, true); }
+function openAccountModal(aid, cyc) { state.ui.accModal = { aid, cyc: cyc || ymKey(state.ui.year, state.ui.month) }; state.ui.dayModal = null; buildAccountModal(state.ui.accModal, true); }
+function openDayModal(d)            { state.ui.dayModal = d;  state.ui.accModal = null; buildDayModal(d, true); }
 
-function buildAccountModal(aid, fresh) {
+function buildAccountModal({ aid, cyc }, fresh) {
   const a = state.accounts[aid];
   if (!a) { closeModal(); return; }
-  const ym = ymKey(state.ui.year, state.ui.month);
+  const ym = cyc;
   const mark = markOf(aid, ym);
   const v = mark?.v || "";
   const meta = v ? `Marked ${v} by ${esc((mark.by||"").split("@")[0])} · ${fmtWhen(mark.at)}` : "Not marked yet this month.";
   const html = `
     <h2>${esc(a.vendor)} ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</h2>
-    <div class="sub">${esc(MONTH_NAMES[state.ui.month-1])} ${state.ui.year}</div>
+    <div class="sub">${esc(MONTH_NAMES[+ym.slice(5)-1])} ${+ym.slice(0,4)}'s invoice${a.consolidated ? " — consolidated: one invoice covers " + (a.storeIds||[]).length + " stores" : ""}</div>
     <dl class="acc-facts">
-      <dt>Store</dt><dd>${esc(a.store)}</dd>
+      <dt>Store</dt><dd>${esc(dspStore(a.store))}</dd>
       <dt>Account #</dt><dd>${esc(a.accountNumber || "…" + a.last4)}</dd>
       <dt>Est. receival</dt><dd>${esc(a.estReceival || "—")}</dd>
       <dt>Est. invoice</dt><dd>${esc(a.estInvoice || "—")}</dd>
@@ -992,28 +1035,37 @@ function buildAccountModal(aid, fresh) {
     <div class="actions"><button class="btn" data-close>Close</button></div>`;
   if (fresh) openModal(html); else $("modalBox").innerHTML = html;
   $("modalBox").querySelectorAll("[data-set]").forEach(b =>
-    b.addEventListener("click", () => { writeMark(aid, b.dataset.set); closeModal(); }));
+    b.addEventListener("click", () => { writeMark(aid, b.dataset.set, ym); closeModal(); }));
   $("modalBox").querySelector("[data-close]").addEventListener("click", closeModal);
 }
 
 function buildDayModal(d, fresh) {
   const ym = ymKey(state.ui.year, state.ui.month);
   const daysIn = new Date(state.ui.year, state.ui.month, 0).getDate();
-  const list = visibleRows(ym)
-    .map(([aid, a]) => [aid, a, parseRange(a.estReceival)])
-    .filter(([, , r]) => r && Math.min(r.d1, daysIn) === d)
-    .sort((x, y) => statusWeight(statusOf(x[0], ym)) - statusWeight(statusOf(y[0], ym))
-      || x[1].vendor.localeCompare(y[1].vendor));
-  const savedC = list.filter(([aid]) => statusOf(aid, ym) === "Y").length;
-  const rowsHtml = list.map(([aid, a, r]) => {
-    const v = statusOf(aid, ym);
+  const prev = prevYmOf(ym);
+  const prevName = MONTH_NAMES[+prev.slice(5) - 1];
+  const list = [];
+  for (const [aid, a] of visibleRows(ym)) {
+    const r = parseRange(a.estReceival);
+    if (r && !r.next && Math.min(r.d1, daysIn) === d) list.push([aid, a, r, ym, ""]);
+  }
+  for (const [aid, a] of Object.entries(state.accounts)) {
+    if (!isActive(a, prev) || !passesFilters(a, aid, prev)) continue;
+    const r = parseRange(a.estReceival);
+    if (r && r.next && Math.min(r.d1, daysIn) === d) list.push([aid, a, r, prev, prevName + "'s invoice"]);
+  }
+  list.sort((x, y) => statusWeight(statusOf(x[0], x[3])) - statusWeight(statusOf(y[0], y[3]))
+    || x[1].vendor.localeCompare(y[1].vendor));
+  const savedC = list.filter(([aid,,,cyc]) => statusOf(aid, cyc) === "Y").length;
+  const rowsHtml = list.map(([aid, a, r, cyc, sfx]) => {
+    const v = statusOf(aid, cyc);
     return `<div class="dm-row">
-      <div class="who"><b>${esc(a.vendor)}</b> ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""} · ${esc(a.store)}
+      <div class="who"><b>${esc(a.vendor)}</b> ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""} · ${esc(dspStore(a.store))}${sfx ? ` <span class="acct">(${esc(sfx)})</span>` : ""}
         <div class="acct">${esc(a.accountNumber || "…" + a.last4)}</div></div>
       <div class="est">est. ${rangeLabel(r)}</div>
       <div class="stamp">
-        <button class="y ${v==="Y"?"on":""}" data-aid="${esc(aid)}" data-v="Y">Y</button>
-        <button class="n ${v==="N"?"on":""}" data-aid="${esc(aid)}" data-v="N">N</button>
+        <button class="y ${v==="Y"?"on":""}" data-aid="${esc(aid)}" data-v="Y" data-ym="${esc(cyc)}">Y</button>
+        <button class="n ${v==="N"?"on":""}" data-aid="${esc(aid)}" data-v="N" data-ym="${esc(cyc)}">N</button>
       </div></div>`;
   }).join("") || `<div class="empty">Nothing expected on this day with the current filters.</div>`;
   const html = `
@@ -1023,14 +1075,14 @@ function buildDayModal(d, fresh) {
     <div class="actions"><button class="btn" data-close>Close</button></div>`;
   if (fresh) openModal(html, true); else $("modalBox").innerHTML = html;
   $("modalBox").querySelectorAll(".stamp button").forEach(b =>
-    b.addEventListener("click", () => setMark(b.dataset.aid, b.dataset.v)));
+    b.addEventListener("click", () => setMark(b.dataset.aid, b.dataset.v, b.dataset.ym)));
   $("modalBox").querySelector("[data-close]").addEventListener("click", closeModal);
 }
 
 function renderOpenPopups() {
   if (!$("overlay").classList.contains("open")) return;
   if (state.ui.dayModal != null) buildDayModal(state.ui.dayModal, false);
-  else if (state.ui.accModal != null) buildAccountModal(state.ui.accModal, false);
+  else if (state.ui.accModal) buildAccountModal(state.ui.accModal, false);
 }
 
 function renderSide() {
@@ -1038,7 +1090,7 @@ function renderSide() {
   const per = {};
   for (const [aid, a] of Object.entries(state.accounts)) {
     if (!isActive(a, ym)) continue;
-    per[a.storeId] ||= { name: a.store, missing: 0 };
+    per[a.storeId] ||= { name: dspStore(a.store), missing: 0 };
     if (markOf(aid, ym)?.v !== "Y") per[a.storeId].missing++;
   }
   const rows = Object.entries(per).sort((x,y) => y[1].missing - x[1].missing || x[1].name.localeCompare(y[1].name));
@@ -1071,9 +1123,9 @@ function exportCsv() {
   const ym = ymKey(state.ui.year, state.ui.month);
   const rows = [["Month","Log","Vendor","Store","Account#","Est Receival","Est Invoice","Est Due","Status","By","When"]];
   for (const [aid, a] of Object.entries(state.accounts)) {
-    if (!isActive(a, ym) || !passesFilters(a, aid)) continue;
+    if (!isActive(a, ym) || !passesFilters(a, aid, ym)) continue;
     const m = markOf(aid, ym);
-    rows.push([ym, a.book, a.vendor, a.store, a.accountNumber, a.estReceival, a.estInvoice, a.estDue, m?.v || "", m?.by || "", fmtWhen(m?.at)]);
+    rows.push([ym, a.book, a.vendor, dspStore(a.store), a.accountNumber, a.estReceival, a.estInvoice, a.estDue, m?.v || "", m?.by || "", fmtWhen(m?.at)]);
   }
   const csv = rows.map(r => r.map(c => `"${String(c ?? "").replace(/"/g,'""')}"`).join(",")).join("\r\n");
   const a = document.createElement("a");
@@ -1098,7 +1150,7 @@ function closeModal(){ $("overlay").classList.remove("open"); state.ui.dayModal 
    Manage drawer: Stores · Vendors · Accounts · FindMi sync · Data
 ====================================================================== */
 function openAdmin(tab) {
-  const tabs = [["stores","Stores"],["vendors","Vendors"],["accounts","Accounts"],["sync","FindMi sync"],["data","Data"]];
+  const tabs = [["stores","Stores"],["vendors","Vendors"],["accounts","Accounts"],["data","Data"]];
   openModal(`
     <h2>Manage</h2>
     <div class="sub">Add a store once — it flows into every month, count, and filter automatically.</div>
@@ -1107,28 +1159,44 @@ function openAdmin(tab) {
     <div class="actions"><button class="btn" id="adminClose">Close</button></div>`, true);
   $("modalBox").querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => openAdmin(b.dataset.t)));
   $("adminClose").addEventListener("click", closeModal);
-  ({ stores: renderAdminStores, vendors: renderAdminVendors, accounts: renderAdminAccounts, sync: renderAdminSync, data: renderAdminData })[tab]();
+  ({ stores: renderAdminStores, vendors: renderAdminVendors, accounts: renderAdminAccounts, data: renderAdminData })[tab]();
 }
 
 /* ---- Stores tab ---- */
 function renderAdminStores() {
   const list = Object.entries(state.stores).sort((a,b) => a[1].name.localeCompare(b[1].name));
   $("adminBody").innerHTML = `
-    <button class="btn primary" id="addStoreBtn">Add store</button>
+    <div class="row2" style="align-items:center">
+      <button class="btn primary" id="addStoreBtn">Add store</button>
+      <button class="btn" id="fmOpen">Compare with FindMi…</button>
+    </div>
+    <div id="fmSection" class="hidden">
+      <label style="margin-top:10px">FindMi API URL</label>
+      <input type="url" id="fmUrl" value="" placeholder="https://…vercel.app/api/dpm-alignment">
+      <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="fmFetch">Compare with FindMi</button></div>
+      <div id="fmResults"></div>
+    </div>
     <table class="mini-table"><thead><tr><th>Store</th><th>Entity</th><th>Accounts</th><th></th></tr></thead>
     <tbody>${list.map(([id, s]) => {
       const n = Object.values(state.accounts).filter(a => a.storeId === id && !a.activeTo).length;
-      return `<tr><td>${esc(s.name)}</td><td>${esc(s.entity || "")}</td><td>${n} active</td>
+      return `<tr><td>${esc(dspStore(s.name))}</td><td>${esc(s.entity || "")}</td><td>${n} active</td>
         <td class="act"><button data-edit="${esc(id)}">Edit</button></td></tr>`;
     }).join("")}</tbody></table>`;
   $("addStoreBtn").addEventListener("click", () => storeWizard());
+  $("fmUrl").value = state.settings.findmiUrl || "";
+  $("fmOpen").addEventListener("click", () => {
+    $("fmSection").classList.toggle("hidden");
+    if (!$("fmSection").classList.contains("hidden") && state.settings.findmiUrl) runFindmiCompare();
+  });
+  $("fmFetch").addEventListener("click", runFindmiCompare);
+  if (state.ui.openSync) { state.ui.openSync = false; $("fmSection").classList.remove("hidden"); if (state.settings.findmiUrl) runFindmiCompare(); }
   $("adminBody").querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => storeWizard(b.dataset.edit)));
 }
 
 function storeWizard(editId) {
   const s = editId ? state.stores[editId] : { name: "", entity: "", active: true };
   const storeOpts = Object.entries(state.stores).sort((a,b)=>a[1].name.localeCompare(b[1].name))
-    .map(([id, st]) => `<option value="${esc(id)}">${esc(st.name)}</option>`).join("");
+    .map(([id, st]) => `<option value="${esc(id)}">${esc(dspStore(st.name))}</option>`).join("");
   const ymNow = realYm();
   openModal(`
     <h2>${editId ? "Edit store" : "Add store"}</h2>
@@ -1216,10 +1284,69 @@ function renderAdminVendors() {
     <tbody>${list.map(([id,v]) => {
       const n = Object.values(state.accounts).filter(a => a.vendorId === id && !a.activeTo).length;
       return `<tr><td>${esc(v.name)}</td><td>${n}</td>
-        <td class="act"><button data-ext="${esc(id)}">Add to stores…</button></td></tr>`;
+        <td class="act"><button data-ext="${esc(id)}">Add to stores…</button> <button data-cons="${esc(id)}">Consolidate…</button></td></tr>`;
     }).join("")}</tbody></table>`;
   $("addVendorBtn").addEventListener("click", () => vendorWizard(null));
   $("adminBody").querySelectorAll("[data-ext]").forEach(b => b.addEventListener("click", () => vendorWizard(b.dataset.ext)));
+  $("adminBody").querySelectorAll("[data-cons]").forEach(b => b.addEventListener("click", () => consolidateWizard(b.dataset.cons)));
+}
+
+/** Consolidated billing: from a start month, ONE invoice covers the selected stores.
+    Per-store accounts end the month before; every past month keeps its rows and marks. */
+function consolidateWizard(vendorId) {
+  const v = state.vendors[vendorId];
+  const start = realYm();
+  const perStore = Object.entries(state.accounts)
+    .filter(([, a]) => a.vendorId === vendorId && !a.activeTo && !a.consolidated)
+    .sort((x, y) => x[1].store.localeCompare(y[1].store));
+  if (!perStore.length) { toast("This vendor has no active per-store accounts to consolidate."); return; }
+  const est = perStore[0][1];
+  openModal(`
+    <h2>Consolidate ${esc(v.name)} billing</h2>
+    <div class="sub">From the start month, the ticked stores share <b>one</b> invoice — one Y to press. Their separate accounts stop the month before. Every past month keeps its rows and marks.</div>
+    <label>Stores on the consolidated bill <span class="acct">(<a href="#" id="cwAll">all</a> · <a href="#" id="cwNone">none</a>)</span></label>
+    <div class="checklist">${perStore.map(([aid, a]) =>
+      `<label><input type="checkbox" checked value="${esc(aid)}"> ${esc(dspStore(a.store))} <span class="acct">(${esc(a.book)}${a.last4 ? " · …" + esc(a.last4) : ""})</span></label>`).join("")}</div>
+    <div class="row3">
+      <div><label>Consolidated account #</label><input type="text" id="cwAcct" placeholder="optional — fill when known"></div>
+      <div><label>Est. receival</label><input type="text" id="cwRcv" value="${esc(est.estReceival || "")}" placeholder="e.g. 5 next month"></div>
+      <div><label>Log</label><select id="cwBook"><option>BK</option><option>DPR</option></select></div>
+    </div>
+    <label>Starts (YYYY-MM)</label><input type="text" id="cwFrom" value="${start}">
+    <div class="note" style="margin-top:8px">Forward-only: months before the start month are completely untouched.</div>
+    <div class="actions">
+      <button class="btn" id="cwCancel">Cancel</button>
+      <button class="btn primary" id="cwGo">Consolidate</button>
+    </div>`);
+  $("cwCancel").addEventListener("click", () => openAdmin("vendors"));
+  $("cwAll").addEventListener("click", (e) => { e.preventDefault(); $("modalBox").querySelectorAll(".checklist input").forEach(i => i.checked = true); });
+  $("cwNone").addEventListener("click", (e) => { e.preventDefault(); $("modalBox").querySelectorAll(".checklist input").forEach(i => i.checked = false); });
+  $("cwGo").addEventListener("click", async () => {
+    const picked = [...$("modalBox").querySelectorAll(".checklist input:checked")].map(i => i.value);
+    if (picked.length < 2) return toast("Pick at least two stores — one store doesn't need consolidating.", true);
+    const from = ($("cwFrom").value.trim().match(/^\d{4}-\d{2}$/) || [start])[0];
+    if (!backdateOk(from)) return;
+    const endPrev = prevYmOf(from);
+    if (!confirm(`Consolidate ${v.name} for ${picked.length} stores starting ${from}?\n\n• One invoice (one Y) from ${from} onward\n• The ${picked.length} per-store accounts end ${endPrev}\n• Months up to ${endPrev}: unchanged`)) return;
+    const storeIds = picked.map(aid => state.accounts[aid].storeId);
+    const acct = $("cwAcct").value.trim();
+    const book = $("cwBook").value;
+    try {
+      const batch = fb.writeBatch(fb.db);
+      const cid = `cons--${vendorId}--${from}`;
+      batch.set(fb.doc(fb.db, "accounts", cid), {
+        vendorId, vendor: v.name, consolidated: true, storeIds,
+        storeId: "cons--" + vendorId, store: `${v.name} — consolidated (${picked.length} stores)`,
+        accountNumber: acct, last4: acct.replace(/\D/g, "").slice(-4), book, billType: "ACH",
+        estReceival: $("cwRcv").value.trim(), estInvoice: "", estDue: "",
+        activeFrom: from, activeTo: null, notes: "Consolidated billing — one invoice covers " + picked.length + " stores",
+      });
+      picked.forEach(aid => batch.set(fb.doc(fb.db, "accounts", aid), { activeTo: endPrev }, { merge: true }));
+      await batch.commit();
+      toast(`${v.name} consolidated for ${picked.length} stores from ${from}. One Y per month from now on.`);
+      openAdmin("vendors");
+    } catch (e) { toast("Consolidate failed — " + explainError(e), true); DIAG.err("consolidate", e.code||e.message); console.error(e); }
+  });
 }
 
 /** One screen: vendor name + which stores + est. dates → an account per store, starting this month. */
@@ -1236,7 +1363,7 @@ function vendorWizard(vendorId) {
     <div class="sub">One screen: ${v ? "" : "name the vendor, "}tick the stores it bills, done. An account is created per store — fill in the account numbers whenever they arrive.</div>
     ${v ? "" : `<label>Vendor name</label><input type="text" id="vwName" placeholder="e.g. Frontier">`}
     <div class="row3">
-      <div><label>Est. receival (day)</label><input type="text" id="vwRcv" placeholder="e.g. 22-23"></div>
+      <div><label>Est. receival (day)</label><input type="text" id="vwRcv" placeholder="e.g. 22-23, or 5 next month"></div>
       <div><label>Est. invoice date</label><input type="text" id="vwInv" placeholder="optional"></div>
       <div><label>Est. due / draft</label><input type="text" id="vwDue" placeholder="optional"></div>
     </div>
@@ -1248,7 +1375,7 @@ function vendorWizard(vendorId) {
     </div>
     <label>Stores it bills <span class="acct">(<a href="#" id="vwAll">all</a> · <a href="#" id="vwNone">none</a>)</span></label>
     ${stores.length ? `<div class="checklist">${stores.map(([sid, s]) =>
-      `<label><input type="checkbox" value="${esc(sid)}"> ${esc(s.name)}${s.entity ? ` <span class="acct">(${esc(s.entity)})</span>` : ""}</label>`).join("")}</div>`
+      `<label><input type="checkbox" value="${esc(sid)}"> ${esc(dspStore(s.name))}${s.entity ? ` <span class="acct">(${esc(s.entity)})</span>` : ""}</label>`).join("")}</div>`
       : `<div class="note">Every active store already has this vendor.</div>`}
     <div class="note" style="margin-top:8px">Forward-only: nothing before ${ymNow} changes — past months keep their counts and marks exactly as they are.</div>
     <div class="actions">
@@ -1303,7 +1430,7 @@ function renderAdminAccounts() {
       .sort((a,b) => a[1].vendor.localeCompare(b[1].vendor) || a[1].store.localeCompare(b[1].store))
       .slice(0, 150);
     $("accList").innerHTML = `<table class="mini-table"><thead><tr><th>Vendor</th><th>Store</th><th>Acct #</th><th>Log</th><th>Active</th><th></th></tr></thead>
-      <tbody>${list.map(([id,a]) => `<tr><td>${esc(a.vendor)}</td><td>${esc(a.store)}</td><td class="acct">${esc(a.accountNumber || "—")}</td>
+      <tbody>${list.map(([id,a]) => `<tr><td>${esc(a.vendor)}</td><td>${esc(dspStore(a.store))}</td><td class="acct">${esc(a.accountNumber || "—")}</td>
       <td>${esc(a.book)}</td><td class="acct">${esc(a.activeFrom)}${a.activeTo ? " → " + esc(a.activeTo) : ""}</td>
       <td class="act"><button data-eda="${esc(id)}">Edit</button></td></tr>`).join("")}</tbody></table>
       ${Object.keys(state.accounts).length > 150 && list.length === 150 ? `<div class="sub">Showing first 150 — narrow with the filter.</div>` : ""}`;
@@ -1322,7 +1449,7 @@ function accountForm(editId) {
   const vOpts = Object.entries(state.vendors).sort((x,y)=>x[1].name.localeCompare(y[1].name))
     .map(([id,v]) => `<option value="${esc(id)}" ${id===a.vendorId?"selected":""}>${esc(v.name)}</option>`).join("");
   const sOpts = Object.entries(state.stores).sort((x,y)=>x[1].name.localeCompare(y[1].name))
-    .map(([id,s]) => `<option value="${esc(id)}" ${id===a.storeId?"selected":""}>${esc(s.name)}</option>`).join("");
+    .map(([id,s]) => `<option value="${esc(id)}" ${id===a.storeId?"selected":""}>${esc(dspStore(s.name))}</option>`).join("");
   const books = [...new Set(["BK","DPR", ...Object.values(state.accounts).map(x => x.book)])];
   openModal(`
     <h2>${editId ? "Edit account" : "Add account"}</h2>
@@ -1335,7 +1462,7 @@ function accountForm(editId) {
       <div><label>Log</label><select id="afBook">${books.map(b => `<option ${b===a.book?"selected":""}>${esc(b)}</option>`).join("")}</select></div>
     </div>
     <div class="row3">
-      <div><label>Est. receival (day of month)</label><input type="text" id="afRcv" value="${esc(a.estReceival)}" placeholder="e.g. 22-23"></div>
+      <div><label>Est. receival (day of month)</label><input type="text" id="afRcv" value="${esc(a.estReceival)}" placeholder="e.g. 22-23, or 5 next month"></div>
       <div><label>Est. invoice date</label><input type="text" id="afInv" value="${esc(a.estInvoice)}"></div>
       <div><label>Est. due / draft</label><input type="text" id="afDue" value="${esc(a.estDue)}"></div>
     </div>
@@ -1444,22 +1571,9 @@ async function maybeCheckFindmi() {
     if (d.gone.length) parts.push(`<b>${d.gone.length}</b> no longer listed`);
     $("syncBannerTxt").innerHTML = "FindMi has changes: " + parts.join(" · ") + ". Nothing changes until you review.";
     $("syncBanner").classList.remove("hidden");
-    $("syncReview").onclick = () => { $("syncBanner").classList.add("hidden"); openAdmin("sync"); };
+    $("syncReview").onclick = () => { $("syncBanner").classList.add("hidden"); state.ui.openSync = true; openAdmin("stores"); };
     $("syncDismiss").onclick = () => $("syncBanner").classList.add("hidden");
   } catch (e) { DIAG.err("findmi-check", e.message || e); }   // quiet in the background; the sync tab surfaces errors
-}
-
-function renderAdminSync() {
-  $("adminBody").innerHTML = `
-    <div class="note">Compares the FindMi store directory against this log. Existing stores are <b>matched</b> (by name, store number, or an earlier link) — never re-imported. <b>Nothing is ever deleted:</b> a store that leaves FindMi keeps every past month; you can only choose to stop expecting it going forward.</div>
-    <label>FindMi API URL</label>
-    <input type="url" id="fmUrl" value="${esc(state.settings.findmiUrl || "")}" placeholder="https://…vercel.app/api/dpm-alignment">
-    <div class="actions" style="justify-content:flex-start">
-      <button class="btn primary" id="fmFetch">Compare with FindMi</button>
-    </div>
-    <div id="fmResults"></div>`;
-  $("fmFetch").addEventListener("click", runFindmiCompare);
-  if (state.settings.findmiUrl) runFindmiCompare();   // auto-run when a URL is saved
 }
 
 async function runFindmiCompare() {
@@ -1481,14 +1595,14 @@ async function runFindmiCompare() {
   const nextYm = ymKey(rm === 12 ? ry + 1 : ry, rm === 12 ? 1 : rm + 1);
   const storeOpts = Object.entries(state.stores).filter(([,s]) => s.active !== false)
     .sort((a,b) => a[1].name.localeCompare(b[1].name))
-    .map(([id, st]) => `<option value="${esc(id)}">${esc(st.name)}</option>`).join("");
+    .map(([id, st]) => `<option value="${esc(id)}">${esc(dspStore(st.name))}</option>`).join("");
 
   const matchedRows = d.matched.map(m => {
     const s = state.stores[m.sid];
     const extras = [];
     if (m.entityDiff) extras.push(`<label style="font-size:.76rem"><input type="checkbox" checked data-ent="${esc(m.sid)}" data-val="${esc(m.entityDiff)}"> entity → <b>${esc(m.entityDiff)}</b></label>`);
     if (m.retiredHere) extras.push(`<label style="font-size:.76rem"><input type="checkbox" data-resume="${esc(m.sid)}"> back in FindMi — resume tracking (accounts keep their end dates; re-clone or edit them under Accounts)</label>`);
-    return `<div class="fm-row"><span class="fm-ok">✓</span><span class="grow">${esc(s.name)}${m.fm.name !== s.name ? ` <span class="how">= FindMi “${esc(m.fm.name)}”</span>` : ""}</span><span class="how">${esc(m.how)}</span>${extras.join(" ")}</div>`;
+    return `<div class="fm-row"><span class="fm-ok">✓</span><span class="grow">${esc(dspStore(s.name))}${m.fm.name !== s.name ? ` <span class="how">= FindMi “${esc(m.fm.name)}”</span>` : ""}</span><span class="how">${esc(m.how)}</span>${extras.join(" ")}</div>`;
   }).join("");
 
   const newRows = d.news.map((p, i) => `
@@ -1500,7 +1614,7 @@ async function runFindmiCompare() {
 
   const goneRows = d.gone.map(([sid, s]) => `
     <div class="fm-row">
-      <span class="grow">${esc(s.name)}${s.entity ? ` <span class="how">— ${esc(s.entity)}</span>` : ""}</span>
+      <span class="grow">${esc(dspStore(s.name))}${s.entity ? ` <span class="how">— ${esc(s.entity)}</span>` : ""}</span>
       <label style="font-size:.76rem"><input type="checkbox" data-gone="${esc(sid)}"> stop expecting after ${ymNow} (keeps all history; ${nextYm} onward won't count it)</label>
     </div>`).join("");
 
