@@ -252,6 +252,11 @@ table.grid{width:100%; border-collapse:collapse; min-width:760px}
 .cal-dcount{font-size:.66rem; font-weight:800; color:var(--red)}
 .cal-dsaved{font-size:.64rem; font-weight:800; color:#fff; background:var(--saved); border-radius:9px; padding:1px 6px}
 .okc{color:var(--saved)}
+.row-edit{border:1px solid transparent; background:none; color:var(--muted); cursor:pointer; font-size:.82rem; line-height:1;
+  padding:2px 5px; border-radius:6px; opacity:0; transition:opacity .12s}
+tr:hover .row-edit, .tile:hover .row-edit, .row-edit:focus{opacity:1}
+.row-edit:hover{background:var(--navy-soft); color:var(--navy); border-color:var(--line)}
+@media (hover:none){ .row-edit{opacity:.6} }
 #sideBody tr.on td{background:var(--navy-soft); font-weight:800}
 #sideBody tr{cursor:pointer}
 .cal-chips{display:flex; flex-direction:column; gap:3px; min-width:0}
@@ -1024,7 +1029,8 @@ function renderTiles(rows, ym) {
     const v = statusOf(aid, ym);
     const r = parseRange(a.estReceival);
     html += `<div class="tile ${statusCls(v)}" data-acc="${esc(aid)}" role="button" tabindex="0">
-      <div class="t-vendor"><span class="nm">${esc(a.vendor)}</span>${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</div>
+      <div class="t-vendor"><span class="nm">${esc(a.vendor)}</span>${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}
+        <button class="row-edit" data-edit-acc="${esc(aid)}" title="Edit this account">✎</button></div>
       <div class="t-store">${esc(dspStore(a.store))}</div>
       <div class="t-acct">${esc(a.accountNumber || "…" + a.last4)}</div>
       <div class="t-est">Est. rcv'l ${r ? rangeLabel(r) : esc(a.estReceival || "—")}</div>
@@ -1036,6 +1042,8 @@ function renderTiles(rows, ym) {
   $("tilesWrap").innerHTML = html;
   $("tilesWrap").querySelectorAll(".stamp button").forEach(b =>
     b.addEventListener("click", (e) => { e.stopPropagation(); setMark(b.dataset.aid, b.dataset.v); }));
+  $("tilesWrap").querySelectorAll("[data-edit-acc]").forEach(b =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); accountForm(b.dataset.editAcc, "grid"); }));
   $("tilesWrap").querySelectorAll(".tile").forEach(t => {
     t.addEventListener("click", () => openAccountModal(t.dataset.acc));
     t.addEventListener("keydown", (e) => { if (e.key === "Enter") openAccountModal(t.dataset.acc); });
@@ -1057,7 +1065,8 @@ function renderList(rows, ym) {
     const v = mark?.v || "";
     const meta = v ? `${esc((mark.by||"").split("@")[0])} · ${fmtWhen(mark.at)}` : "";
     html += `<tr>
-      <td>${esc(a.vendor)} ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</td>
+      <td><button class="row-edit" data-edit-acc="${esc(aid)}" title="Edit ${esc(a.vendor)} — account #, estimate dates, tracking">✎</button>
+        ${esc(a.vendor)} ${a.book ? `<span class="badge-book">${esc(a.book)}</span>` : ""}</td>
       <td>${esc(dspStore(a.store))}</td>
       <td class="acct" title="${esc(a.accountNumber)}">${esc(a.accountNumber || ("…" + a.last4))}</td>
       <td class="est">${esc(a.estReceival)}</td>
@@ -1073,6 +1082,8 @@ function renderList(rows, ym) {
   body.innerHTML = html;
   body.querySelectorAll(".stamp button").forEach(b =>
     b.addEventListener("click", () => setMark(b.dataset.aid, b.dataset.v)));
+  body.querySelectorAll("[data-edit-acc]").forEach(b =>
+    b.addEventListener("click", () => accountForm(b.dataset.editAcc, "grid")));
 }
 
 /* ------------- Account & day popups ------------- */
@@ -1103,8 +1114,10 @@ function buildAccountModal({ aid, cyc }, fresh) {
       <button data-set="">Clear</button>
     </div>
     <div class="acc-meta">${meta}</div>
-    <div class="actions"><button class="btn" data-close>Close</button></div>`;
+    <div class="actions"><button class="btn" data-edit-acc="${esc(aid)}">Edit details…</button><button class="btn" data-close>Close</button></div>`;
   if (fresh) openModal(html); else $("modalBox").innerHTML = html;
+  $("modalBox").querySelectorAll("[data-edit-acc]").forEach(b =>
+    b.addEventListener("click", () => accountForm(b.dataset.editAcc, "grid")));
   $("modalBox").querySelectorAll("[data-set]").forEach(b =>
     b.addEventListener("click", () => { writeMark(aid, b.dataset.set, ym); closeModal(); }));
   $("modalBox").querySelector("[data-close]").addEventListener("click", closeModal);
@@ -1674,7 +1687,7 @@ function renderAdminAccounts() {
   draw();
 }
 
-function accountForm(editId) {
+function accountForm(editId, backTo) {   // backTo: "grid" returns to the month view, default returns to Manage → Accounts
   const a = editId ? state.accounts[editId] : {
     vendorId:"", storeId:"", accountNumber:"", book:"BK", billType:"ACH",
     estReceival:"", estInvoice:"", estDue:"", activeFrom: realYm(), activeTo:null, notes:"",
@@ -1704,12 +1717,15 @@ function accountForm(editId) {
       <div><label>Tracked until (blank = ongoing)</label><input type="text" id="afTo" value="${esc(a.activeTo || "")}"></div>
     </div>
     <label>Notes</label><input type="text" id="afNotes" value="${esc(a.notes || "")}">
+    ${editId && a.vendorId ? `<label style="margin-top:10px; display:block"><input type="checkbox" id="afAll">
+      Apply the three estimate dates to <b>every ${esc(a.vendor)} account</b> (${Object.values(state.accounts).filter(x => x.vendorId === a.vendorId && !x.activeTo).length} active) — account numbers and dates tracked stay per store</label>` : ""}
     <div class="note" style="margin-top:8px">Forward-only: this account is expected from "Tracked from" onward. Past months and saved marks never change.</div>
     <div class="actions">
       <button class="btn" id="afCancel">Cancel</button>
       <button class="btn primary" id="afSave">${editId ? "Save changes" : "Add account"}</button>
     </div>`);
-  $("afCancel").addEventListener("click", () => openAdmin("accounts"));
+  const done = () => { if (backTo === "grid") closeModal(); else openAdmin("accounts"); };
+  $("afCancel").addEventListener("click", done);
   $("afSave").addEventListener("click", async () => {
     const vId = $("afVendor").value, sId = $("afStore").value;
     if (!vId || !sId) return toast("Pick a vendor and a store.", true);
@@ -1728,7 +1744,22 @@ function accountForm(editId) {
       activeFrom: from, activeTo: to || null, notes: $("afNotes").value.trim(),
     };
     const aid = editId || `${book.toLowerCase()}--${vId}--${sId}--${digits.slice(-4) || Math.random().toString(36).slice(2,6)}`;
-    try { await fb.setDoc(fb.doc(fb.db, "accounts", aid), rec, { merge: true }); toast("Account saved."); openAdmin("accounts"); }
+    const spreadAll = $("afAll") && $("afAll").checked;
+    try {
+      if (spreadAll) {
+        const sibs = Object.entries(state.accounts).filter(([id, x]) => x.vendorId === vId && !x.activeTo && id !== aid);
+        const batch = fb.writeBatch(fb.db);
+        batch.set(fb.doc(fb.db, "accounts", aid), rec, { merge: true });
+        sibs.forEach(([id]) => batch.set(fb.doc(fb.db, "accounts", id), {
+          estReceival: rec.estReceival, estInvoice: rec.estInvoice, estDue: rec.estDue }, { merge: true }));
+        await batch.commit();
+        toast(`Saved — estimate dates applied to ${sibs.length + 1} ${rec.vendor} accounts.`);
+      } else {
+        await fb.setDoc(fb.doc(fb.db, "accounts", aid), rec, { merge: true });
+        toast("Account saved.");
+      }
+      done();
+    }
     catch (e) { toast("Save failed — " + explainError(e), true); DIAG.err("save", e.code||e.message); console.error(e); }
   });
 }
